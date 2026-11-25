@@ -17,6 +17,57 @@ pub(crate) struct DocumentationInvestigation {
 }
 
 impl DocumentationInvestigation {
+    pub(crate) fn relation_facts(&self) -> Vec<crate::relation_fact::RelationFact> {
+        use crate::relation_fact::RelationFact;
+
+        let mut facts = BTreeSet::new();
+
+        for dependency in &self.dependencies {
+            let documentation = dependency.documentation();
+
+            let package = documentation.package().to_owned();
+            let version = documentation.version().to_string();
+
+            for reference in dependency.references() {
+                for symbol in reference.identifiers() {
+                    facts.insert(RelationFact::new(
+                        "dependency_symbol_reference",
+                        vec![
+                            package.clone(),
+                            version.clone(),
+                            symbol.clone(),
+                            reference.file().to_owned(),
+                            reference.import_name().to_owned(),
+                        ],
+                    ));
+                }
+            }
+
+            for rows in dependency.selection().rows().values() {
+                for row in rows {
+                    let (Some(symbol), Some(kind)) = (row.get("symbol"), row.get("kind")) else {
+                        continue;
+                    };
+
+                    let description = row.get("documentation").cloned().unwrap_or_default();
+
+                    facts.insert(RelationFact::new(
+                        "documented_symbol",
+                        vec![
+                            package.clone(),
+                            version.clone(),
+                            symbol.clone(),
+                            kind.clone(),
+                            description,
+                        ],
+                    ));
+                }
+            }
+        }
+
+        facts.into_iter().collect()
+    }
+
     pub(crate) fn acquire(
         cache: &mut DocumentationCache,
         scanner: &mut DependencyScanner,

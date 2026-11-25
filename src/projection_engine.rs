@@ -1,11 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    io,
+};
 
 use crate::{
+    cognitive_engine::CognitiveEngine, cognitive_registry::CognitiveRegistry,
     dependency_scanner::DependencyScanner, documentation_cache::DocumentationCache,
     documentation_investigation::DocumentationInvestigation, event_payload::EventPayload,
-    intervention_projection::InterventionProjection, memory::Memory,
-    release_comparison::ReleaseComparison, symbolic_dataset::SymbolicDataset,
-    symbolic_engine::SymbolicEngine,
+    intervention_projection::InterventionProjection, lexical_processor::LexicalProcessor,
+    memory::Memory, relation_fact::RelationFact, release_comparison::ReleaseComparison,
+    symbolic_dataset::SymbolicDataset, symbolic_engine::SymbolicEngine,
 };
 
 pub(crate) struct ProjectionEngine;
@@ -14,10 +19,16 @@ impl ProjectionEngine {
     pub(crate) fn project(
         memory: &Memory,
         dataset: &SymbolicDataset,
-    ) -> Vec<InterventionProjection> {
+    ) -> Result<Vec<InterventionProjection>, Box<dyn Error>> {
         let mut projections = Vec::new();
+
         let mut documentation_cache = DocumentationCache::default();
         let mut dependency_scanner = DependencyScanner::default();
+
+        let mut cognitive_registry = CognitiveRegistry::default();
+        cognitive_registry.register(LexicalProcessor);
+
+        let cognitive_engine = CognitiveEngine::new(cognitive_registry, 16);
 
         for analysis in memory.publication_analyses() {
             let Some(event) = memory.event(analysis.event_id()) else {
@@ -95,6 +106,24 @@ impl ProjectionEngine {
 
                 let deductions = SymbolicEngine::infer(dataset, &facts);
 
+                let mut observed = Vec::new();
+
+                if let Some(comparison) = &comparison {
+                    observed.extend(comparison.relation_facts());
+                }
+
+                if let Some(documentation) = &documentation {
+                    observed.extend(documentation.relation_facts());
+                }
+
+                for fact in &facts {
+                    observed.push(RelationFact::new("legacy_fact", vec![fact.clone()]));
+                }
+
+                let cognition = cognitive_engine
+                    .infer(dataset, observed)
+                    .map_err(io::Error::other)?;
+
                 projections.push(InterventionProjection::new(
                     analysis.event_id().to_owned(),
                     repository.clone(),
@@ -108,10 +137,11 @@ impl ProjectionEngine {
                     failure,
                     facts,
                     deductions,
+                    cognition,
                 ));
             }
         }
 
-        projections
+        Ok(projections)
     }
 }

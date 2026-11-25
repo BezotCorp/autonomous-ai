@@ -16,7 +16,7 @@ impl Registry {
             .trim_end_matches('/');
 
         let normalized = match index {
-            Self::CRATES_IO_SPARSE_INDEX => Self::CRATES_IO_GIT_INDEX,
+            "crates.io" | Self::CRATES_IO_SPARSE_INDEX => Self::CRATES_IO_GIT_INDEX,
             _ => index,
         };
 

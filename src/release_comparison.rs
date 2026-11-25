@@ -18,6 +18,54 @@ pub(crate) struct ReleaseComparison {
 }
 
 impl ReleaseComparison {
+    pub(crate) fn relation_facts(&self) -> Vec<crate::relation_fact::RelationFact> {
+        use crate::relation_fact::RelationFact;
+
+        let mut facts = BTreeSet::new();
+
+        facts.insert(RelationFact::new(
+            "release_revision_transition",
+            vec![
+                self.previous_revision.clone(),
+                self.current_revision.clone(),
+            ],
+        ));
+
+        for difference in &self.differences {
+            facts.insert(RelationFact::new(
+                "source_change",
+                vec![
+                    difference.path().to_owned(),
+                    difference.category().to_owned(),
+                ],
+            ));
+
+            for item in difference.previous() {
+                facts.insert(RelationFact::new(
+                    "source_item_removed",
+                    vec![
+                        difference.path().to_owned(),
+                        difference.category().to_owned(),
+                        item.clone(),
+                    ],
+                ));
+            }
+
+            for item in difference.current() {
+                facts.insert(RelationFact::new(
+                    "source_item_added",
+                    vec![
+                        difference.path().to_owned(),
+                        difference.category().to_owned(),
+                        item.clone(),
+                    ],
+                ));
+            }
+        }
+
+        facts.into_iter().collect()
+    }
+
     pub(crate) fn previous_revision(&self) -> &str {
         &self.previous_revision
     }

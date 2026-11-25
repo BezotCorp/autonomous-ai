@@ -9,6 +9,18 @@ pub(crate) struct SourceDifference {
 }
 
 impl SourceDifference {
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn previous(&self) -> &[String] {
+        &self.previous
+    }
+
+    pub(crate) fn current(&self) -> &[String] {
+        &self.current
+    }
+
     pub(crate) fn new(
         path: String,
         category: String,

@@ -40,6 +40,14 @@ impl DependencyReference {
         }
     }
 
+    pub(crate) fn file(&self) -> &str {
+        &self.file
+    }
+
+    pub(crate) fn import_name(&self) -> &str {
+        &self.import_name
+    }
+
     pub(crate) fn package(&self) -> &str {
         &self.package
     }

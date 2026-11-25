@@ -53,7 +53,7 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             let store = MemoryStore::open(&memory)?;
             let memory = store.load()?;
 
-            let projections = ProjectionEngine::project(&memory, &dataset);
+            let projections = ProjectionEngine::project(&memory, &dataset)?;
 
             write_output(&projections)?;
         }

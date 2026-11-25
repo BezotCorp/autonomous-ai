@@ -16,6 +16,18 @@ pub(crate) struct DependencyDocumentation {
 }
 
 impl DependencyDocumentation {
+    pub(crate) fn documentation(&self) -> &PackageDocumentation {
+        &self.documentation
+    }
+
+    pub(crate) fn references(&self) -> &[DependencyReference] {
+        &self.references
+    }
+
+    pub(crate) fn selection(&self) -> &DocumentationSelection {
+        &self.selection
+    }
+
     pub(crate) fn new(
         documentation: PackageDocumentation,
         references: Vec<DependencyReference>,

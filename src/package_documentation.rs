@@ -21,6 +21,14 @@ pub(crate) struct PackageDocumentation {
 }
 
 impl PackageDocumentation {
+    pub(crate) fn package(&self) -> &str {
+        &self.package
+    }
+
+    pub(crate) fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
     pub(crate) fn new(package: &str, version: &semver::Version, source: String) -> Self {
         Self {
             package: package.to_owned(),

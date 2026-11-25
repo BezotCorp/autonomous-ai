@@ -11,6 +11,10 @@ pub(crate) struct DocumentationSelection {
 }
 
 impl DocumentationSelection {
+    pub(crate) fn rows(&self) -> &BTreeMap<String, Vec<BTreeMap<String, String>>> {
+        &self.rows
+    }
+
     pub(crate) fn insert(&mut self, query: String, rows: Vec<BTreeMap<String, String>>) {
         self.rows.insert(query, rows);
     }

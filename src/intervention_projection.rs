@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::{
-    documentation_investigation::DocumentationInvestigation, release_comparison::ReleaseComparison,
-    repository::Repository, symbolic_deduction::SymbolicDeduction,
+    cognition_result::CognitionResult, documentation_investigation::DocumentationInvestigation,
+    release_comparison::ReleaseComparison, repository::Repository,
+    symbolic_deduction::SymbolicDeduction,
 };
 
 #[derive(Debug, Serialize)]
@@ -21,6 +22,7 @@ pub(crate) struct InterventionProjection {
     investigation_failure: Option<String>,
     facts: BTreeSet<String>,
     deductions: Vec<SymbolicDeduction>,
+    cognition: CognitionResult,
 }
 
 impl InterventionProjection {
@@ -38,6 +40,7 @@ impl InterventionProjection {
         investigation_failure: Option<String>,
         facts: BTreeSet<String>,
         deductions: Vec<SymbolicDeduction>,
+        cognition: CognitionResult,
     ) -> Self {
         Self {
             event_id,
@@ -52,6 +55,7 @@ impl InterventionProjection {
             investigation_failure,
             facts,
             deductions,
+            cognition,
         }
     }
 }
