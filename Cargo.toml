@@ -1,0 +1,11 @@
+[package]
+name = "autonomous-ai"
+version = "0.1.0"
+edition = "2024"
+description = "Autonomous artificial intelligence"
+license = "Apache-2.0"
+repository = "https://github.com/BezotCorp/autonomous-ai"
+readme = "README.md"
+publish = true
+
+[dependencies]
