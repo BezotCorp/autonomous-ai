@@ -17,6 +17,14 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
+    pub(crate) fn event(&self, id: &str) -> Option<&Event> {
+        self.events.get(id)
+    }
+
+    pub(crate) fn publication_analyses(&self) -> &[PublicationAnalysis] {
+        &self.publication_analyses
+    }
+
     pub(crate) fn knowledge(&self) -> &Knowledge {
         &self.knowledge
     }

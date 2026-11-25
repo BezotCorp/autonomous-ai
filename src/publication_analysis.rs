@@ -14,6 +14,14 @@ pub(crate) struct PublicationAnalysis {
 }
 
 impl PublicationAnalysis {
+    pub(crate) fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub(crate) fn older_packages(&self) -> &[OlderResolvedPackage] {
+        &self.older_packages
+    }
+
     pub(crate) fn new(
         event_id: String,
         examined_snapshots: Vec<SnapshotIdentity>,

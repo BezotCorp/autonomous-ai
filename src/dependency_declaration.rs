@@ -3,7 +3,7 @@ use std::error::Error;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    constants::{PACKAGE_KEY, WORKSPACE_KEY},
+    constants::{PACKAGE_KEY, VERSION_KEY, WORKSPACE_KEY},
     dependency_kind::DependencyKind,
 };
 
@@ -39,7 +39,7 @@ impl DependencyDeclaration {
                 let mut table = toml::Table::new();
 
                 table.insert(
-                    "version".to_owned(),
+                    VERSION_KEY.to_owned(),
                     toml::Value::String(requirement.clone()),
                 );
 
@@ -82,7 +82,7 @@ impl DependencyDeclaration {
             .transpose()?
             .unwrap_or_default();
 
-        let requirement = string("version")?
+        let requirement = string(VERSION_KEY)?
             .as_deref()
             .map(semver::VersionReq::parse)
             .transpose()?;

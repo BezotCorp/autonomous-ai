@@ -11,6 +11,18 @@ pub(crate) struct OlderResolvedPackage {
 }
 
 impl OlderResolvedPackage {
+    pub(crate) fn snapshot(&self) -> &SnapshotIdentity {
+        &self.snapshot
+    }
+
+    pub(crate) fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
+    pub(crate) fn lockfile(&self) -> &str {
+        &self.lockfile
+    }
+
     pub(crate) fn new(
         snapshot: SnapshotIdentity,
         lockfile: String,

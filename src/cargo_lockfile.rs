@@ -1,4 +1,4 @@
-use crate::constants::VERSION_KEY;
+use crate::constants::{PACKAGE_KEY, VERSION_KEY};
 
 use std::error::Error;
 
@@ -29,7 +29,7 @@ impl CargoLockfile {
             .transpose()?;
 
         let mut packages: Vec<ResolvedPackage> = document
-            .remove("package")
+            .remove(PACKAGE_KEY)
             .map(toml::Value::try_into)
             .transpose()?
             .unwrap_or_default();

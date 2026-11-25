@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::{
     arguments::Arguments, event::Event, intelligence::Intelligence, memory_store::MemoryStore,
+    projection_engine::ProjectionEngine, symbolic_dataset::SymbolicDataset,
 };
 
 pub(crate) fn execute() -> ExitCode {
@@ -35,6 +36,28 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
 
             write_output(&report)?;
         }
+        Arguments::GenerateKnowledge {
+            source,
+            destination,
+        } => {
+            SymbolicDataset::generate(&source, &destination)?;
+        }
+
+        Arguments::Project { memory, dataset } => {
+            let dataset = SymbolicDataset::load(&dataset)?;
+
+            if !memory.is_file() {
+                return Err(format!("Memory file does not exist: {}", memory.display(),).into());
+            }
+
+            let store = MemoryStore::open(&memory)?;
+            let memory = store.load()?;
+
+            let projections = ProjectionEngine::project(&memory, &dataset);
+
+            write_output(&projections)?;
+        }
+
         Arguments::Inspect(path) => {
             if !path.is_file() {
                 return Err(format!("Memory file does not exist: {}", path.display(),).into());
