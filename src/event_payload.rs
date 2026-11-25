@@ -12,6 +12,7 @@ pub(crate) enum EventPayload {
     PackagePublished {
         repository: Repository,
         package: String,
+        registry: String,
         version: semver::Version,
     },
     WorkflowCompleted {

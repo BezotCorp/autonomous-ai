@@ -29,7 +29,9 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
 
             let mut intelligence = Intelligence::new(store.load()?);
 
-            let report = intelligence.receive(event, &store)?;
+            let report = intelligence.receive(event)?;
+
+            store.save(intelligence.memory())?;
 
             write_output(&report)?;
         }
