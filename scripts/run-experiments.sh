@@ -10,7 +10,8 @@
 #   B: acquired knowledge, no learned routing
 #   C: learned routing, no acquired knowledge
 #   D: acquired knowledge and learned routing
-# The statistics of each configuration are printed at the end. Statistics of
+# A one-line summary per episode, then the statistics of each configuration,
+# are printed at the end (complete reports stay available with `inspect`). Statistics of
 # B, C and D also include the training episodes, which ran under the full
 # configuration (label "knowledge=true routing=true").
 set -euo pipefail
@@ -88,5 +89,6 @@ for configuration in A B C D; do
   done
 
   printf '\n=== Configuration %s (%s)\n' "$configuration" "${flags[$configuration]:-full}"
+  "$binary" inspect --memory "$memory" --section summary
   "$binary" inspect --memory "$memory" --section statistics
 done
