@@ -29,11 +29,20 @@ pub(crate) struct PeriodReport {
     latent_path: f64,
     knowledge: BTreeMap<String, u64>,
     new_statements: Vec<String>,
+    /// Observations of the environment that perceived someone.
+    perceptions: u64,
+    /// Messages received from other individuals (relays included).
+    received_from_individuals: u64,
+    /// Imagined scenes in which perceiving or transmitting was a question,
+    /// never acted upon there: envisaged interactions.
+    envisaged: u64,
 }
 
 impl PeriodReport {
     const OCCURRENCES: usize = 12;
     const STATEMENTS: usize = 20;
+    /// Predicates of the capabilities of perceiving and transmitting.
+    const INTERACTIONS: [&'static str; 2] = ["present", "transmitted"];
 
     pub(crate) fn of(existence: &Existence, from: f64, to: f64) -> Self {
         let mut report = Self {
@@ -51,6 +60,9 @@ impl PeriodReport {
             latent_path: 0.0,
             knowledge: BTreeMap::new(),
             new_statements: Vec::new(),
+            perceptions: 0,
+            received_from_individuals: 0,
+            envisaged: 0,
         };
         let mut occurrences: BTreeMap<String, u64> = BTreeMap::new();
         let mut first_sample: Option<(&[f64], f64, f64, u64)> = None;
@@ -113,6 +125,14 @@ impl PeriodReport {
                 }
                 LifeEvent::Occurrence { signature, .. } => {
                     *occurrences.entry(signature.clone()).or_default() += 1;
+
+                    if signature == "produce:environment_observation" {
+                        report.perceptions += 1;
+                    }
+
+                    if signature.starts_with("stimulus:individual:") {
+                        report.received_from_individuals += 1;
+                    }
                 }
                 LifeEvent::Latent { state } => {
                     if let Some(previous) = previous_state {
@@ -162,6 +182,24 @@ impl PeriodReport {
         }
 
         if let (Some(start), Some(end)) = wall {
+            for dream in existence.memory().dreams().dreams() {
+                if dream.started_at() < start || dream.started_at() > end {
+                    continue;
+                }
+
+                report.envisaged += dream
+                    .scenes()
+                    .iter()
+                    .filter(|scene| {
+                        scene
+                            .questions()
+                            .iter()
+                            .chain(scene.emerged_needs())
+                            .any(|need| Self::INTERACTIONS.contains(&need.predicate()))
+                    })
+                    .count() as u64;
+            }
+
             for entry in existence.memory().knowledge().entries() {
                 let first = entry
                     .evidence()
@@ -204,6 +242,11 @@ impl fmt::Display for PeriodReport {
         writeln!(formatter, "activities ended: {:?}", self.ended)?;
         writeln!(formatter, "stimuli: {:?}", self.stimuli)?;
         writeln!(formatter, "transmitted: {:?}", self.transmitted)?;
+        writeln!(
+            formatter,
+            "environment: {} perceptions of someone, {} messages received from individuals, {} imagined scenes envisaging an interaction",
+            self.perceptions, self.received_from_individuals, self.envisaged
+        )?;
         writeln!(formatter, "concerns formed by origin: {:?}", self.concerns)?;
         writeln!(
             formatter,

@@ -9,6 +9,7 @@ pub(crate) struct Session {
     end: f64,
     last_checkpoint: Instant,
     next_sample: f64,
+    next_plasticity: f64,
     scheduled: usize,
     turn: usize,
     stopped: bool,
@@ -21,6 +22,7 @@ impl Session {
             end: start + duration.max(0.0),
             last_checkpoint: Instant::now(),
             next_sample: start,
+            next_plasticity: start,
             scheduled: 0,
             turn: 0,
             stopped: false,
@@ -53,6 +55,15 @@ impl Session {
     pub(crate) fn sample_due(&mut self, now: f64, every: f64) -> bool {
         if now >= self.next_sample {
             self.next_sample = now + every;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn plasticity_due(&mut self, now: f64, every: f64) -> bool {
+        if now >= self.next_plasticity {
+            self.next_plasticity = now + every;
             true
         } else {
             false

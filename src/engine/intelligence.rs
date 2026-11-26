@@ -878,9 +878,19 @@ impl Intelligence {
             .chain(knowledge.rules().iter().cloned().map(Content::Rule))
             .map(|content| (content, EpistemicKind::Premise, resource.clone(), None))
             .chain(Perception::perceive(event).into_iter().map(|content| {
+                // A rule another individual passes on is its conjecture for
+                // the recipient: proposed, never established.
+                let kind = if perceived == EpistemicKind::Testimony
+                    && matches!(content, Content::Rule(_))
+                {
+                    EpistemicKind::Hypothesis
+                } else {
+                    perceived
+                };
+
                 (
                     content,
-                    perceived,
+                    kind,
                     Producer::Perception,
                     Some(provenance.clone()),
                 )

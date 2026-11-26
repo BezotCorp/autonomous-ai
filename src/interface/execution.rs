@@ -149,7 +149,7 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
         "intervene" => intervene(line),
         "inspect" => {
             line.accept(
-                &["--section", "--last", "--kind", "--from", "--to"],
+                &["--section", "--last", "--kind", "--from", "--to", "--every"],
                 &["--csv"],
             )?;
 
@@ -165,6 +165,7 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
                     line.number("--from")?.unwrap_or(f64::NEG_INFINITY),
                     line.number("--to")?.unwrap_or(f64::INFINITY),
                 ),
+                line.number("--every")?,
             )?)
         }
         "branch" => {

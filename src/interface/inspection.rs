@@ -21,6 +21,7 @@ impl Inspection {
         kind: Option<&str>,
         csv: bool,
         period: (f64, f64),
+        every: Option<f64>,
     ) -> Result<String, Box<dyn Error>> {
         let memory = existence.memory();
         let (from, to) = period;
@@ -32,6 +33,13 @@ impl Inspection {
                 LifeSummary::of(existence).csv_row()
             ),
             "summary" => LifeSummary::of(existence).to_string(),
+            "periods" => crate::living::period_series::PeriodSeries::of(
+                existence,
+                from,
+                to,
+                every.unwrap_or(86_400.0),
+            )?
+            .to_string(),
             "report" => {
                 crate::living::period_report::PeriodReport::of(existence, from, to).to_string()
             }

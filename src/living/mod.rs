@@ -19,6 +19,7 @@ pub(crate) mod mailbox;
 pub(crate) mod ongoing_activity;
 pub(crate) mod organism;
 pub(crate) mod period_report;
+pub(crate) mod period_series;
 pub(crate) mod response;
 pub(crate) mod scheduled_stimulus;
 pub(crate) mod session;

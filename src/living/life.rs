@@ -71,6 +71,8 @@ impl<'a> Life<'a> {
     const MINIMUM_SLICE: f64 = 1.0;
     /// Lived seconds between two samples of the latent state.
     const SAMPLING: f64 = 60.0;
+    /// Lived seconds between two records of the channels and plasticity.
+    const PLASTICITY_SAMPLING: f64 = 600.0;
     /// Bound on the concerns a single imaginative unfolding may raise.
     const IMAGINED_CONCERNS: usize = 3;
     /// Salience a stimulus has per question it asks (plus one for itself),
@@ -242,6 +244,10 @@ impl<'a> Life<'a> {
             let now = existence.clock().lived();
 
             if session.sample_due(now, Self::SAMPLING) {
+                existence.organism(self.settings.clock()).0.sample();
+            }
+
+            if session.plasticity_due(now, Self::PLASTICITY_SAMPLING) {
                 self.sample(existence);
             }
 
@@ -251,7 +257,7 @@ impl<'a> Life<'a> {
         }
     }
 
-    /// Records the latent state and the plastic changes so far.
+    /// Records the latent state, the channels and the plastic changes so far.
     fn sample(&self, existence: &mut Existence) {
         existence.organism(self.settings.clock()).0.sample();
 
@@ -326,6 +332,7 @@ impl<'a> Life<'a> {
                     occurred_at,
                     message.statements().to_vec(),
                     message.documents().to_vec(),
+                    message.rules().to_vec(),
                     message.questions().to_vec(),
                 ),
             );
@@ -348,6 +355,7 @@ impl<'a> Life<'a> {
                             .filter(|(_, from)| from == chain)
                             .map(|(statement, _)| statement.clone())
                             .collect(),
+                        Vec::new(),
                         Vec::new(),
                         Vec::new(),
                     ),
@@ -710,15 +718,29 @@ impl<'a> Life<'a> {
             ));
         }
 
-        for (id, activity, hold) in suspended {
-            if self.settings.allows(activity)
-                && (vigilance == Vigilance::Awake || !activity.is_conscious())
-            {
-                candidates.push((
-                    Transition::Resume(id),
-                    organism.decision(Channel::Resume, hold.max(1e-9).ln()),
-                ));
-            }
+        // As for concerns, the propensity to resume grows with what is held
+        // in suspense with diminishing returns, each activity in proportion
+        // to its share (otherwise many suspended activities would make
+        // resumptions incessant by construction).
+        let resumable: Vec<(Uuid, f64)> = suspended
+            .into_iter()
+            .filter(|(_, activity, _)| {
+                self.settings.allows(*activity)
+                    && (vigilance == Vigilance::Awake || !activity.is_conscious())
+            })
+            .map(|(id, _, hold)| (id, hold))
+            .collect();
+        let held: f64 = resumable.iter().map(|(_, hold)| hold).sum();
+
+        for (id, hold) in resumable {
+            let context = (hold / held.max(f64::MIN_POSITIVE) * (1.0 + held).ln())
+                .max(1e-12)
+                .ln();
+
+            candidates.push((
+                Transition::Resume(id),
+                organism.decision(Channel::Resume, context),
+            ));
         }
 
         candidates
@@ -1362,6 +1384,13 @@ impl<'a> Life<'a> {
             // An event asking nothing is done with once it has been
             // perceived and reasoned upon.
             Activity::Action if episode.questions().is_empty() => Some(ActivityEnding::Completed),
+            // Nothing left that any capability could do: going on would
+            // repeat the same slice.
+            Activity::Action
+                if episode.termination() == crate::memory::termination::Termination::Quiescent =>
+            {
+                Some(ActivityEnding::Exhausted)
+            }
             Activity::Action => None,
             Activity::Reflection
                 if !episode.corrections().is_empty()

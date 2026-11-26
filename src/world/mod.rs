@@ -2,6 +2,7 @@ pub(crate) mod cohabitation;
 pub(crate) mod environment;
 pub(crate) mod environment_report;
 pub(crate) mod environment_store;
+pub(crate) mod format_one;
 pub(crate) mod member;
 pub(crate) mod message;
 pub(crate) mod portal;

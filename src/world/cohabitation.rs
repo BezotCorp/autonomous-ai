@@ -358,7 +358,8 @@ mod tests {
         let a_portal = Portal::new(shared.clone(), handles[0].clone(), a.clock().lived());
         let event: Event = ron::de::from_str(&format!(
             r#"(id: "lab", source: "test", occurred_at: "2026-11-26T00:00:00Z",
-                payload: assertions(statements: ["colour(sky, blue)"]),
+                payload: assertions(statements: ["colour(sky, blue)"],
+                    rules: ["flies(?x) :- bird(?x)"]),
                 questions: ["transmitted({}, ?message)"])"#,
             handles[1]
         ))
@@ -460,6 +461,21 @@ mod tests {
             .expect("the testimony was integrated");
 
         assert_eq!(entry.standing(), &Standing::Reported);
+
+        // A rule passed on is a conjecture for the recipient.
+        assert!(
+            transmission
+                .message()
+                .rules()
+                .iter()
+                .any(|rule| rule.to_string() == "flies(?x) :- bird(?x)")
+        );
+        assert!(
+            b.memory()
+                .knowledge()
+                .hypotheses()
+                .any(|record| record.rule().to_string() == "flies(?x) :- bird(?x)")
+        );
     }
 
     #[test]

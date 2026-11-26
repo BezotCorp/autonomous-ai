@@ -20,10 +20,15 @@ pub(crate) struct EnvironmentReport {
     delivered: BTreeMap<String, u64>,
     pending: u64,
     undeliverable: u64,
+    /// Transmissions to an existence from which a message had been
+    /// delivered to the emitter before: possible replies (the order in time
+    /// is observed; that it answers anything is not established).
+    replies: u64,
     statements: u64,
     questions: u64,
     relayed: u64,
     documents: u64,
+    rules: u64,
 }
 
 impl EnvironmentReport {
@@ -51,15 +56,25 @@ impl EnvironmentReport {
             delivered: BTreeMap::new(),
             pending: 0,
             undeliverable: 0,
+            replies: 0,
             statements: 0,
             questions: 0,
             relayed: 0,
             documents: 0,
+            rules: 0,
         };
 
         for transmission in environment.transmissions() {
             if transmission.emitted_at() < from || transmission.emitted_at() > to {
                 continue;
+            }
+
+            if environment.transmissions().iter().any(|earlier| {
+                earlier.from() == transmission.to()
+                    && earlier.to() == transmission.from()
+                    && matches!(earlier.status(), TransmissionStatus::Delivered { at } if *at <= transmission.emitted_at())
+            }) {
+                report.replies += 1;
             }
 
             let pair = format!("{} -> {}", transmission.from(), transmission.to());
@@ -80,6 +95,7 @@ impl EnvironmentReport {
             report.questions += message.questions().len() as u64;
             report.relayed += message.relayed().len() as u64;
             report.documents += message.documents().len() as u64;
+            report.rules += message.rules().len() as u64;
         }
 
         report
@@ -104,13 +120,15 @@ impl fmt::Display for EnvironmentReport {
 
         writeln!(
             formatter,
-            "transmissions emitted in [{:.0}, {:.0}] s: {} ({} pending, {} undeliverable); content: {} statements, {} questions, {} relayed, {} texts",
+            "transmissions emitted in [{:.0}, {:.0}] s: {} ({} pending, {} undeliverable, {} after receiving from the addressee); content: {} statements, {} rules, {} questions, {} relayed, {} texts",
             self.period.0,
             self.period.1,
             self.emitted.values().sum::<u64>(),
             self.pending,
             self.undeliverable,
+            self.replies,
             self.statements,
+            self.rules,
             self.questions,
             self.relayed,
             self.documents

@@ -17,7 +17,7 @@ use crate::{
 /// sending, to that destination of the environment, what the reasoning has
 /// at hand: its other open questions, the statements related to them (or
 /// else the latest ones), what it had itself been told (relayed, with the
-/// chain of sources), and texts. The destination must be an address the
+/// chain of sources), the rules it conjectures, and texts. The destination must be an address the
 /// individual knows of (it appears in the reasoning); when it is left
 /// open, the first known one is used, and without any, nothing is sent.
 ///
@@ -36,6 +36,7 @@ impl Communication {
     const RELAYED: usize = 8;
     const QUESTIONS: usize = 4;
     const DOCUMENTS: usize = 2;
+    const RULES: usize = 4;
     /// Predicates of the reasoning about the act of communicating itself
     /// or about presences, never sent as content.
     const OWN: [&'static str; 2] = ["transmitted", "present"];
@@ -129,7 +130,31 @@ impl Communication {
             .take(Self::DOCUMENTS)
             .collect();
 
-        Message::new(statements, relayed, questions, documents)
+        // Rules it holds or conjectures (never those of its initial
+        // resources, which every individual has, nor those the unconscious
+        // injected, nor imagined ones).
+        let rules = graph
+            .valid_nodes()
+            .filter(|node| {
+                matches!(
+                    node.kind(),
+                    EpistemicKind::Observation
+                        | EpistemicKind::Recollection
+                        | EpistemicKind::Hypothesis
+                        | EpistemicKind::Testimony
+                ) && matches!(
+                    node.producer(),
+                    crate::reasoning::producer::Producer::Module(_)
+                        | crate::reasoning::producer::Producer::Perception
+                )
+            })
+            .filter_map(|node| node.content().rule().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .take(Self::RULES)
+            .collect();
+
+        Message::new(statements, relayed, questions, documents, rules)
     }
 
     /// Destinations the individual knows of: those of the need, else the

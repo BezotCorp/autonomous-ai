@@ -52,6 +52,10 @@ pub(crate) struct LifeSummary {
     extreme_gains: Vec<(String, f64)>,
     repairs: u64,
     technical_errors: u64,
+    transmitted: u64,
+    received_from_individuals: u64,
+    perceptions: u64,
+    exhausted: u64,
     interventions: Vec<String>,
 }
 
@@ -251,6 +255,25 @@ impl LifeSummary {
             extreme_gains: gains,
             repairs: existence.latent().repairs(),
             technical_errors: total("technical_error"),
+            transmitted: total("transmitted"),
+            received_from_individuals: existence
+                .catalog()
+                .reactions()
+                .iter()
+                .filter(|(signature, _)| signature.starts_with("stimulus:individual:"))
+                .map(|(_, record)| record.count())
+                .sum(),
+            perceptions: existence
+                .catalog()
+                .reactions()
+                .get("produce:environment_observation")
+                .map_or(0, |record| record.count()),
+            exhausted: existence
+                .activities()
+                .ended()
+                .iter()
+                .filter(|ended| ended.ending().label() == "exhausted")
+                .count() as u64,
             interventions,
         }
     }
@@ -292,6 +315,10 @@ impl LifeSummary {
                 "engagements",
                 "repairs",
                 "technical_errors",
+                "exhausted",
+                "transmitted",
+                "received_from_individuals",
+                "perceptions",
             ]
             .map(str::to_owned),
         );
@@ -361,6 +388,10 @@ impl LifeSummary {
             self.engagements.to_string(),
             self.repairs.to_string(),
             self.technical_errors.to_string(),
+            self.exhausted.to_string(),
+            self.transmitted.to_string(),
+            self.received_from_individuals.to_string(),
+            self.perceptions.to_string(),
         ]);
         values.join(",")
     }
@@ -468,6 +499,11 @@ impl fmt::Display for LifeSummary {
             formatter,
             "technical: {} latent repairs, {} technical errors",
             self.repairs, self.technical_errors
+        )?;
+        writeln!(
+            formatter,
+            "environment: {} perceptions of someone, {} transmissions, {} messages received from individuals; {} actions exhausted",
+            self.perceptions, self.transmitted, self.received_from_individuals, self.exhausted
         )?;
 
         for intervention in &self.interventions {

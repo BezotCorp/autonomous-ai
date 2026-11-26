@@ -52,6 +52,10 @@ impl DreamRecord {
         self.id
     }
 
+    pub(crate) fn started_at(&self) -> DateTime<Utc> {
+        self.started_at
+    }
+
     pub(crate) fn activity(&self) -> Activity {
         self.activity
     }

@@ -26,6 +26,7 @@ impl Event {
         occurred_at: DateTime<Utc>,
         statements: Vec<Statement>,
         documents: Vec<crate::representation::document::Document>,
+        rules: Vec<crate::representation::rule::Rule>,
         questions: Vec<Statement>,
     ) -> Self {
         Self {
@@ -34,7 +35,7 @@ impl Event {
             occurred_at,
             payload: EventPayload::Assertions {
                 statements,
-                rules: Vec::new(),
+                rules,
                 documents,
             },
             questions,

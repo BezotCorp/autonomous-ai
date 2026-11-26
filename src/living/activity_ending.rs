@@ -18,6 +18,9 @@ pub(crate) enum ActivityEnding {
     Dissolved,
     /// It reached the technical bound on the slices of one activity.
     Bounded,
+    /// Nothing more could be done for it: its last slice found no
+    /// capability with anything to do.
+    Exhausted,
 }
 
 impl ActivityEnding {
@@ -29,6 +32,7 @@ impl ActivityEnding {
             Self::Transformed(_) => "transformed",
             Self::Dissolved => "dissolved",
             Self::Bounded => "bounded",
+            Self::Exhausted => "exhausted",
         }
     }
 }

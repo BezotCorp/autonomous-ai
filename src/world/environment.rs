@@ -67,6 +67,34 @@ impl Environment {
         })
     }
 
+    /// An environment as it was saved (format migrations).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore(
+        id: Uuid,
+        name: String,
+        seed: u64,
+        created_at: DateTime<Utc>,
+        clock: f64,
+        latency: f64,
+        perceptibility: f64,
+        external: bool,
+        members: Vec<Member>,
+        transmissions: Vec<Transmission>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            seed,
+            created_at,
+            clock,
+            latency,
+            perceptibility,
+            external,
+            members,
+            transmissions,
+        }
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
@@ -239,7 +267,7 @@ mod tests {
             &first,
             &second,
             100.0,
-            Message::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            Message::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         );
 
         assert_eq!(status, TransmissionStatus::Pending);
