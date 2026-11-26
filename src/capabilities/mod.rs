@@ -1,0 +1,12 @@
+pub(crate) mod cargo_observation;
+pub(crate) mod documentation_observation;
+pub(crate) mod hypothesis_formation;
+pub(crate) mod knowledge_retrieval;
+pub(crate) mod linguistic_analysis;
+pub(crate) mod logical_inference;
+pub(crate) mod mathematical_reasoning;
+pub(crate) mod module_catalog;
+pub(crate) mod relational_analysis;
+pub(crate) mod release_observation;
+pub(crate) mod repository_discovery;
+pub(crate) mod source_reference_observation;
