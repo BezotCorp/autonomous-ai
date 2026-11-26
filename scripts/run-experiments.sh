@@ -29,6 +29,12 @@ if [ "${4:-}" = "--offline" ]; then
   extra+=(--offline)
 fi
 
+# Further decision parameters (e.g. "--cost-weight 0.05 --minimum-utility 0.2").
+if [ -n "${AUTONOMOUS_AI_OPTIONS:-}" ]; then
+  read -r -a options <<<"$AUTONOMOUS_AI_OPTIONS"
+  extra+=("${options[@]}")
+fi
+
 root=$(git rev-parse --show-toplevel)
 cargo build --release --locked --manifest-path "$root/Cargo.toml" >&2
 target=$(cargo metadata --format-version 1 --no-deps --manifest-path "$root/Cargo.toml" |

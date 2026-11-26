@@ -140,8 +140,16 @@ impl CognitiveModule for LogicalInference {
 }
 
 impl Exploration<'_> {
-    fn is_focused(pattern: &Statement) -> bool {
-        pattern.arguments().is_empty() || pattern.arguments().iter().any(|term| !term.is_variable())
+    /// A missing premise is focused when the data bound at least one of
+    /// its variables, or when it has no variable at all. Constants written
+    /// in the rule do not focus it: they say nothing about the situation.
+    fn is_focused(premise: &Statement, instantiated: &Statement) -> bool {
+        premise.variables().next().is_none()
+            || premise
+                .arguments()
+                .iter()
+                .zip(instantiated.arguments())
+                .any(|(written, current)| written.is_variable() && !current.is_variable())
     }
 
     fn explore(&mut self, bindings: &Bindings, matched: &mut Vec<NodeId>, remaining: &[usize]) {
@@ -191,9 +199,10 @@ impl Exploration<'_> {
         });
 
         if let Some(missing) = missing.filter(|_| !refinable) {
-            let (_, missing, _) = candidates.swap_remove(missing);
+            let (position, missing, _) = candidates.swap_remove(missing);
+            let premise = &premises[remaining[position]];
 
-            if self.goal.is_some() || Self::is_focused(&missing) {
+            if self.goal.is_some() || Self::is_focused(premise, &missing) {
                 let mut justification = vec![self.rule_node];
                 justification.extend_from_slice(matched);
                 justification.extend(self.goal);

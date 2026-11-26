@@ -11,6 +11,8 @@ pub(crate) enum Arguments {
         learned_routing: bool,
         offline: bool,
         maximum_invocations: Option<usize>,
+        cost_weight: Option<f64>,
+        minimum_utility: Option<f64>,
         detailed: bool,
     },
     /// Prints a section of the persistent memory.
@@ -26,7 +28,8 @@ impl Arguments {
         "Usage:\n",
         "  autonomous-ai run --memory <memory.bin> --resources <dir> [--seed <n>]\n",
         "                    [--without-knowledge] [--without-routing] [--offline]\n",
-        "                    [--max-invocations <n>] [--detailed]   < event.ron\n",
+        "                    [--max-invocations <n>] [--cost-weight <per-second>]\n",
+        "                    [--minimum-utility <u>] [--detailed]   < event.ron\n",
         "  autonomous-ai inspect --memory <memory.bin> [--section knowledge|hypotheses|routing|experiences|statistics]\n",
         "  autonomous-ai relearn --memory <memory.bin>\n",
         "  autonomous-ai modules",
@@ -44,6 +47,8 @@ impl Arguments {
         let mut learned_routing = true;
         let mut offline = false;
         let mut maximum_invocations = None;
+        let mut cost_weight = None;
+        let mut minimum_utility = None;
         let mut detailed = false;
 
         while let Some(option) = arguments.next() {
@@ -61,6 +66,12 @@ impl Arguments {
                 "--max-invocations" => {
                     maximum_invocations =
                         Some(value()?.parse().map_err(|_| "Invalid invocation budget")?)
+                }
+                "--cost-weight" => {
+                    cost_weight = Some(value()?.parse().map_err(|_| "Invalid cost weight")?)
+                }
+                "--minimum-utility" => {
+                    minimum_utility = Some(value()?.parse().map_err(|_| "Invalid minimum utility")?)
                 }
                 "--without-knowledge" => acquired_knowledge = false,
                 "--without-routing" => learned_routing = false,
@@ -85,6 +96,8 @@ impl Arguments {
                 learned_routing,
                 offline,
                 maximum_invocations,
+                cost_weight,
+                minimum_utility,
                 detailed,
             }),
             "inspect" => Ok(Self::Inspect {

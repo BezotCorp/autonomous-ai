@@ -8,6 +8,8 @@ pub(crate) mod evidence;
 pub(crate) mod experience_memory;
 pub(crate) mod hypothesis_record;
 pub(crate) mod hypothesis_status;
+pub(crate) mod impasse_kind;
+pub(crate) mod impasse_record;
 pub(crate) mod invocation_outcome;
 pub(crate) mod invocation_record;
 pub(crate) mod knowledge_entry;

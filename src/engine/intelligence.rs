@@ -9,9 +9,9 @@ use crate::{
     },
     engine::{
         belief_revision::BeliefRevision, candidate::Candidate, consolidation::Consolidation,
-        episode_report::EpisodeReport, learning_parameters::LearningParameters,
-        module_selector::ModuleSelector, perception::Perception,
-        question_answering::QuestionAnswering,
+        episode_report::EpisodeReport, impasse_diagnosis::ImpasseDiagnosis,
+        learning_parameters::LearningParameters, module_selector::ModuleSelector,
+        perception::Perception, question_answering::QuestionAnswering,
     },
     events::event::Event,
     mathematics::random_source::RandomSource,
@@ -79,6 +79,7 @@ impl Intelligence {
         let episode = Uuid::now_v7();
         let started_at = Utc::now();
         let clock = Instant::now();
+        let configuration = configuration.with_parameters(&self.parameters);
         let mut random = RandomSource::new(configuration.seed());
         let mut working = WorkingMemory::new(event.questions().to_vec());
         let mut trace = EpisodeTrace::default();
@@ -116,6 +117,18 @@ impl Intelligence {
             }
         }
 
+        // Kinds of information the long-term memory can currently provide:
+        // part of the situation in which modules are chosen.
+        let remembered: BTreeSet<String> = knowledge
+            .active_entries()
+            .map(|entry| entry.statement().signature())
+            .chain(
+                knowledge
+                    .hypotheses()
+                    .map(|record| record.rule().conclusion().signature()),
+            )
+            .collect();
+
         let selector = ModuleSelector::new(routing, &self.parameters);
         let mut seen = vec![0_u64; self.registry.modules().len()];
         let mut invocations: Vec<InvocationRecord> = Vec::new();
@@ -136,13 +149,13 @@ impl Intelligence {
                 break Termination::TimeBudgetExhausted;
             }
 
-            let candidates = self.candidates(&working, &seen, previous.as_deref());
+            let candidates = self.candidates(&working, &seen, previous.as_deref(), &remembered);
 
             let Some((position, selection)) = selector.select(&candidates, &mut random) else {
                 break Termination::Quiescent;
             };
 
-            if selection.utility() < self.parameters.minimum_utility() {
+            if selection.best_expected_utility() < self.parameters.minimum_utility() {
                 break Termination::NothingWorthTrying;
             }
 
@@ -206,12 +219,7 @@ impl Intelligence {
 
         Self::assess(graph, &support, &mut invocations);
 
-        let open_needs: Vec<Statement> = graph
-            .valid_nodes()
-            .filter_map(|node| node.content().need())
-            .filter(|pattern| !graph.answers(pattern))
-            .cloned()
-            .collect();
+        let impasses = ImpasseDiagnosis::diagnose(graph, &self.registry, &invocations);
 
         let (knowledge_memory, routing_memory, experiences) = memory.parts_mut();
 
@@ -232,7 +240,7 @@ impl Intelligence {
             answers,
             changes.hypotheses_proposed().to_vec(),
             changes.hypotheses_refuted().to_vec(),
-            open_needs,
+            impasses,
             termination,
             notes,
         );
@@ -301,6 +309,7 @@ impl Intelligence {
         working: &WorkingMemory,
         seen: &[u64],
         previous: Option<&str>,
+        remembered: &BTreeSet<String>,
     ) -> Vec<Candidate> {
         let graph = working.graph();
         let mut candidates = Vec::new();
@@ -321,6 +330,12 @@ impl Intelligence {
                 }
 
                 features.insert(node.content().feature());
+
+                if let Some(pattern) = node.content().need()
+                    && remembered.contains(&pattern.signature())
+                {
+                    features.insert(format!("remembered:{}", pattern.signature()));
+                }
             }
 
             if features.is_empty() {
@@ -421,7 +436,8 @@ impl Intelligence {
     }
 
     /// Assigns each invocation a verifiable outcome once the episode is over.
-    /// A need contributes when an answer-supporting statement fulfils it.
+    /// A need contributes when an answer-supporting statement fulfils it;
+    /// satisfying a need, or formulating one later satisfied, is progress.
     fn assess(
         graph: &ReasoningGraph,
         support: &BTreeSet<NodeId>,
@@ -447,6 +463,17 @@ impl Intelligence {
                 })
         };
 
+        // Needs satisfied after they were formulated, and the statements
+        // that satisfied them: both sides made verifiable progress.
+        let mut progress = BTreeSet::new();
+
+        for (need, by) in graph.satisfactions() {
+            if by > need {
+                progress.insert(*need);
+                progress.insert(*by);
+            }
+        }
+
         for invocation in invocations {
             if invocation.error().is_some() {
                 continue;
@@ -462,6 +489,8 @@ impl Intelligence {
                 InvocationOutcome::Unproductive
             } else if produced.iter().any(|id| contributes(*id)) {
                 InvocationOutcome::Contributed
+            } else if produced.iter().any(|id| progress.contains(id)) {
+                InvocationOutcome::Advanced
             } else if produced
                 .iter()
                 .any(|id| graph.node(*id).is_some_and(|node| node.is_valid()))
@@ -587,5 +616,39 @@ mod tests {
 
         assert_eq!(hypothesis.status(), &HypothesisStatus::Refuted);
         assert_eq!(memory.experiences().episodes().len(), 2);
+    }
+
+    #[test]
+    fn resumes_a_need_once_its_prerequisite_is_satisfied() {
+        let mut registry = crate::cognition::module_registry::ModuleRegistry::default();
+
+        registry.register(crate::cognition::scripted_module::ScriptedModule::new(
+            "gatherer",
+            Some("item(?x)"),
+            "fact(?x, 1)",
+        ));
+        registry.register(crate::cognition::scripted_module::ScriptedModule::new(
+            "lister", None, "item(a)",
+        ));
+
+        let intelligence = Intelligence::new(
+            registry,
+            InitialResources::default(),
+            LearningParameters::default(),
+        );
+        let mut memory = PersistentMemory::default();
+
+        let report = intelligence.reason(
+            &event("staged", &["context(x)"], &[], &["fact(?which, 1)"]),
+            &mut memory,
+            EpisodeConfiguration::new(4, true, true),
+            false,
+        );
+
+        assert_eq!(
+            report.episode_answers()[0].status(),
+            AnswerStatus::Proven,
+            "{report:#?}"
+        );
     }
 }

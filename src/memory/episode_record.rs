@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::{
     memory::{
         answer_record::AnswerRecord, episode_configuration::EpisodeConfiguration,
-        invocation_record::InvocationRecord, revision_record::RevisionRecord,
-        termination::Termination,
+        impasse_record::ImpasseRecord, invocation_record::InvocationRecord,
+        revision_record::RevisionRecord, termination::Termination,
     },
     representation::{rule::Rule, statement::Statement},
 };
@@ -26,7 +26,7 @@ pub(crate) struct EpisodeRecord {
     answers: Vec<AnswerRecord>,
     hypotheses_proposed: Vec<Rule>,
     hypotheses_refuted: Vec<Rule>,
-    open_needs: Vec<Statement>,
+    impasses: Vec<ImpasseRecord>,
     termination: Termination,
     notes: Vec<String>,
 }
@@ -45,7 +45,7 @@ impl EpisodeRecord {
         answers: Vec<AnswerRecord>,
         hypotheses_proposed: Vec<Rule>,
         hypotheses_refuted: Vec<Rule>,
-        open_needs: Vec<Statement>,
+        impasses: Vec<ImpasseRecord>,
         termination: Termination,
         notes: Vec<String>,
     ) -> Self {
@@ -61,7 +61,7 @@ impl EpisodeRecord {
             answers,
             hypotheses_proposed,
             hypotheses_refuted,
-            open_needs,
+            impasses,
             termination,
             notes,
         }
@@ -97,6 +97,10 @@ impl EpisodeRecord {
 
     pub(crate) fn hypotheses_refuted(&self) -> &[Rule] {
         &self.hypotheses_refuted
+    }
+
+    pub(crate) fn impasses(&self) -> &[ImpasseRecord] {
+        &self.impasses
     }
 
     pub(crate) fn termination(&self) -> Termination {

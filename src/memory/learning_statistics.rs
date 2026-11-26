@@ -18,6 +18,8 @@ pub(crate) struct LearningStatistics {
     configurations: BTreeMap<String, ConfigurationStatistics>,
     answers: BTreeMap<String, usize>,
     contradictions: usize,
+    root_impasses: BTreeMap<String, usize>,
+    dependent_impasses: usize,
     hypotheses_proposed: usize,
     hypotheses_refuted: usize,
     modules: BTreeMap<String, ModuleStatistics>,
@@ -61,6 +63,21 @@ impl LearningStatistics {
             }
 
             statistics.contradictions += episode.revisions().len();
+
+            for impasse in episode.impasses() {
+                if impasse.kind().is_root() {
+                    *statistics
+                        .root_impasses
+                        .entry(format!(
+                            "{} {}",
+                            impasse.kind().label(),
+                            impasse.need().signature()
+                        ))
+                        .or_default() += 1;
+                } else {
+                    statistics.dependent_impasses += 1;
+                }
+            }
             statistics.hypotheses_proposed += episode.hypotheses_proposed().len();
             statistics.hypotheses_refuted += episode.hypotheses_refuted().len();
 

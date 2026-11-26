@@ -12,10 +12,12 @@ pub(crate) struct SelectionRecord {
     sampled_success: f64,
     expected_cost_seconds: f64,
     utility: f64,
+    best_expected_utility: f64,
     candidates: Vec<(String, f64)>,
 }
 
 impl SelectionRecord {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         features: Vec<String>,
         expected_success: f64,
@@ -23,6 +25,7 @@ impl SelectionRecord {
         sampled_success: f64,
         expected_cost_seconds: f64,
         utility: f64,
+        best_expected_utility: f64,
         candidates: Vec<(String, f64)>,
     ) -> Self {
         Self {
@@ -32,12 +35,15 @@ impl SelectionRecord {
             sampled_success,
             expected_cost_seconds,
             utility,
+            best_expected_utility,
             candidates,
         }
     }
 
-    pub(crate) fn utility(&self) -> f64 {
-        self.utility
+    /// Highest expected utility (posterior mean minus expected cost) among
+    /// the candidates, unaffected by the exploratory sampling.
+    pub(crate) fn best_expected_utility(&self) -> f64 {
+        self.best_expected_utility
     }
 
     pub(crate) fn features(&self) -> &[String] {

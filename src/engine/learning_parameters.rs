@@ -12,7 +12,8 @@ pub(crate) struct LearningParameters {
     /// Penalty subtracted from the sampled success probability per second
     /// of expected execution time. 0 ignores costs entirely.
     cost_weight_per_second: f64,
-    /// Utility below which no candidate is considered worth trying.
+    /// Expected utility below which no candidate is considered worth trying
+    /// and the episode stops. The default never stops on this ground.
     minimum_utility: f64,
     /// Maximum number of module invocations in one episode.
     maximum_invocations: usize,
@@ -36,6 +37,16 @@ impl Default for LearningParameters {
 impl LearningParameters {
     pub(crate) fn with_maximum_invocations(mut self, maximum: usize) -> Self {
         self.maximum_invocations = maximum;
+        self
+    }
+
+    pub(crate) fn with_cost_weight_per_second(mut self, weight: f64) -> Self {
+        self.cost_weight_per_second = weight;
+        self
+    }
+
+    pub(crate) fn with_minimum_utility(mut self, minimum: f64) -> Self {
+        self.minimum_utility = minimum;
         self
     }
 

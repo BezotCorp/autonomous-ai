@@ -40,6 +40,8 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             learned_routing,
             offline,
             maximum_invocations,
+            cost_weight,
+            minimum_utility,
             detailed,
         } => {
             let mut input = String::new();
@@ -51,6 +53,14 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
 
             if let Some(maximum) = maximum_invocations {
                 parameters = parameters.with_maximum_invocations(maximum);
+            }
+
+            if let Some(weight) = cost_weight {
+                parameters = parameters.with_cost_weight_per_second(weight);
+            }
+
+            if let Some(minimum) = minimum_utility {
+                parameters = parameters.with_minimum_utility(minimum);
             }
 
             let seed = match seed {

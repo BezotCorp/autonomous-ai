@@ -49,6 +49,10 @@ impl InvocationRecord {
         }
     }
 
+    pub(crate) fn step(&self) -> usize {
+        self.step
+    }
+
     pub(crate) fn module(&self) -> &str {
         &self.module
     }

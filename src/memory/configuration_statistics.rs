@@ -17,13 +17,7 @@ pub(crate) struct ConfigurationStatistics {
 
 impl ConfigurationStatistics {
     pub(crate) fn label(episode: &EpisodeRecord) -> String {
-        let configuration = episode.configuration();
-
-        format!(
-            "knowledge={} routing={}",
-            configuration.acquired_knowledge(),
-            configuration.learned_routing()
-        )
+        episode.configuration().label()
     }
 
     pub(crate) fn observe(&mut self, episode: &EpisodeRecord) {

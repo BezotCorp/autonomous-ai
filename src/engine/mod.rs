@@ -3,6 +3,7 @@ pub(crate) mod candidate;
 pub(crate) mod consolidation;
 pub(crate) mod consolidation_summary;
 pub(crate) mod episode_report;
+pub(crate) mod impasse_diagnosis;
 pub(crate) mod intelligence;
 pub(crate) mod learning_parameters;
 pub(crate) mod module_selector;

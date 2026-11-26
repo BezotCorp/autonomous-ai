@@ -63,6 +63,12 @@ impl ModuleDescriptor {
         self.supplies.is_empty() || self.supplies.iter().any(|supplied| supplied == signature)
     }
 
+    /// Whether the module explicitly declares this signature, as opposed to
+    /// generic modules that consider every need.
+    pub(crate) fn declares(&self, signature: &str) -> bool {
+        self.supplies.iter().any(|supplied| supplied == signature)
+    }
+
     pub(crate) fn produces(&self, kind: EpistemicKind) -> bool {
         self.produces.contains(&kind)
     }

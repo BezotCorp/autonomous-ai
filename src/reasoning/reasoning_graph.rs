@@ -17,15 +17,23 @@ use crate::{
 /// Each node keeps the premises it was derived from, so that invalidations
 /// propagate to dependent results and only affected branches are revisited.
 /// The same content may be held by several nodes, one per justification.
+///
+/// The graph also tracks which statement satisfied which need. When a need
+/// gets satisfied, the needs it was formulated for are reactivated, so that
+/// the modules able to supply them reconsider them now that more is known;
+/// when the satisfying statement is invalidated, the need reopens.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct ReasoningGraph {
     nodes: Vec<ReasoningNode>,
+    satisfactions: BTreeMap<NodeId, NodeId>,
     #[serde(skip)]
     dependents: Vec<Vec<NodeId>>,
     #[serde(skip)]
     by_content: HashMap<Content, Vec<NodeId>>,
     #[serde(skip)]
     by_predicate: BTreeMap<String, Vec<NodeId>>,
+    #[serde(skip)]
+    needs_by_predicate: BTreeMap<String, Vec<NodeId>>,
     revision: u64,
 }
 
@@ -134,11 +142,18 @@ impl ReasoningGraph {
             _ => Vec::new(),
         };
 
-        if let Some(statement) = content.statement() {
-            self.by_predicate
+        match &content {
+            Content::Statement(statement) => self
+                .by_predicate
                 .entry(statement.predicate().to_owned())
                 .or_default()
-                .push(id);
+                .push(id),
+            Content::Need(pattern) => self
+                .needs_by_predicate
+                .entry(pattern.predicate().to_owned())
+                .or_default()
+                .push(id),
+            _ => {}
         }
 
         self.by_content.entry(content.clone()).or_default().push(id);
@@ -154,11 +169,111 @@ impl ReasoningGraph {
             self.revision,
         ));
 
+        match self.nodes[id.index()].content().clone() {
+            Content::Statement(statement) => self.satisfy_needs(id, &statement),
+            Content::Need(pattern) => {
+                if let Some(answer) = self.answer_to(&pattern) {
+                    self.satisfactions.insert(id, answer);
+                    self.wake(id);
+                }
+            }
+            _ => {}
+        }
+
         Ok(Insertion {
             id,
             created: true,
             contradictions,
         })
+    }
+
+    /// Results directly justified by this node.
+    pub(crate) fn dependents(&self, id: NodeId) -> &[NodeId] {
+        &self.dependents[id.index()]
+    }
+
+    /// Statement that satisfied each need, for the needs satisfied so far.
+    pub(crate) fn satisfactions(&self) -> &BTreeMap<NodeId, NodeId> {
+        &self.satisfactions
+    }
+
+    /// Whether the statement answers the pattern (see `answers`).
+    fn fulfils(pattern: &Statement, statement: &Statement) -> bool {
+        let bindings = Bindings::default();
+
+        bindings.unify(pattern, statement).is_some()
+            || (pattern.is_ground() && bindings.unify(&pattern.complement(), statement).is_some())
+    }
+
+    /// A valid statement node answering the pattern, if any.
+    fn answer_to(&self, pattern: &Statement) -> Option<NodeId> {
+        self.by_predicate
+            .get(pattern.predicate())
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|id| {
+                let node = &self.nodes[id.index()];
+
+                node.is_valid()
+                    && node
+                        .content()
+                        .statement()
+                        .is_some_and(|statement| Self::fulfils(pattern, statement))
+            })
+    }
+
+    /// Records the open needs a new statement satisfies and wakes up the
+    /// needs they were formulated for.
+    fn satisfy_needs(&mut self, statement_id: NodeId, statement: &Statement) {
+        let satisfied: Vec<NodeId> = self
+            .needs_by_predicate
+            .get(statement.predicate())
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|need| {
+                let node = &self.nodes[need.index()];
+
+                node.is_valid()
+                    && !self.satisfactions.contains_key(need)
+                    && node
+                        .content()
+                        .need()
+                        .is_some_and(|pattern| Self::fulfils(pattern, statement))
+            })
+            .collect();
+
+        for need in satisfied {
+            self.satisfactions.insert(need, statement_id);
+            self.wake(need);
+        }
+    }
+
+    /// Reactivates, transitively, the still open needs that motivated a
+    /// need, by giving them a new revision.
+    fn wake(&mut self, need: NodeId) {
+        let mut pending: Vec<NodeId> = self.nodes[need.index()].premises().to_vec();
+        let mut visited = BTreeSet::new();
+
+        while let Some(id) = pending.pop() {
+            let node = &self.nodes[id.index()];
+
+            if !visited.insert(id) || !node.is_valid() || node.content().need().is_none() {
+                continue;
+            }
+
+            pending.extend_from_slice(node.premises());
+
+            if !self.satisfactions.contains_key(&id) {
+                self.touch(id);
+            }
+        }
+    }
+
+    fn touch(&mut self, id: NodeId) {
+        self.revision += 1;
+        self.nodes[id.index()].touch(self.revision);
     }
 
     /// Whether this content was ever held, valid or not.
@@ -269,6 +384,31 @@ impl ReasoningGraph {
             }
         }
 
+        let lost: Vec<NodeId> = self
+            .satisfactions
+            .iter()
+            .filter(|(need, by)| {
+                !self.nodes[by.index()].is_valid() && self.nodes[need.index()].is_valid()
+            })
+            .map(|(need, _)| *need)
+            .collect();
+
+        for need in lost {
+            self.satisfactions.remove(&need);
+
+            let pattern = self.nodes[need.index()].content().need().cloned();
+
+            match pattern.and_then(|pattern| self.answer_to(&pattern)) {
+                Some(answer) => {
+                    self.satisfactions.insert(need, answer);
+                }
+                None => self.touch(need),
+            }
+        }
+
+        self.satisfactions
+            .retain(|need, _| self.nodes[need.index()].is_valid());
+
         invalidated
     }
 
@@ -356,5 +496,56 @@ mod tests {
 
         assert_eq!(invalidated.len(), 2);
         assert!(!graph.node(derived).unwrap().is_valid());
+    }
+
+    #[test]
+    fn wakes_motivating_needs_and_reopens_lost_satisfactions() {
+        let mut graph = ReasoningGraph::default();
+        let producer = Producer::Perception;
+        let need = |text: &str| Content::Need(text.parse().unwrap());
+
+        let goal = graph
+            .insert(
+                need("fact(?x)"),
+                EpistemicKind::Need,
+                producer.clone(),
+                vec![],
+                None,
+                0,
+            )
+            .unwrap()
+            .id();
+        let sub = graph
+            .insert(
+                need("item(?x)"),
+                EpistemicKind::Need,
+                producer.clone(),
+                vec![goal],
+                None,
+                1,
+            )
+            .unwrap()
+            .id();
+
+        let before = graph.node(goal).unwrap().revision();
+        let answer = graph
+            .insert(
+                statement("item(a)"),
+                EpistemicKind::Recollection,
+                producer,
+                vec![],
+                None,
+                2,
+            )
+            .unwrap()
+            .id();
+
+        assert_eq!(graph.satisfactions().get(&sub), Some(&answer));
+        assert!(graph.node(goal).unwrap().revision() > before);
+
+        graph.invalidate(answer, InvalidationCause::Contested { contradiction: 0 }, 3);
+
+        assert!(!graph.satisfactions().contains_key(&sub));
+        assert!(!graph.answers(&"item(?x)".parse().unwrap()));
     }
 }

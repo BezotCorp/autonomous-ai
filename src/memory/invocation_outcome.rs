@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum InvocationOutcome {
     /// At least one result supports an answer to a question.
     Contributed,
+    /// Without supporting an answer, it made verifiable progress: it
+    /// satisfied a need that was open, or formulated a need that was
+    /// satisfied afterwards.
+    Advanced,
     /// Results remained valid but did not support any answer.
     Retained,
     /// Every result was later invalidated.
@@ -18,12 +22,13 @@ pub(crate) enum InvocationOutcome {
 }
 
 impl InvocationOutcome {
-    /// Success criterion used by the routing statistics. When questions were
-    /// asked, only contributing to an answer counts; otherwise keeping valid
-    /// results is the best verifiable outcome available.
+    /// Success criterion used by the routing statistics. Supporting an
+    /// answer or satisfying a need are verifiable successes even when the
+    /// episode as a whole fails; merely keeping valid results only counts
+    /// when no question was asked.
     pub(crate) fn is_success(self, questions_asked: bool) -> bool {
         match self {
-            Self::Contributed => true,
+            Self::Contributed | Self::Advanced => true,
             Self::Retained => !questions_asked,
             Self::Invalidated | Self::Unproductive | Self::Failed => false,
         }

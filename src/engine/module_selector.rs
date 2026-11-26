@@ -7,8 +7,10 @@ use crate::{
 /// Contextual bandit choosing the next module by Thompson sampling.
 ///
 /// For each candidate, the success probability is estimated separately for
-/// every feature of the situation that already has observations (plus the
-/// module-wide statistic), each estimate being a Beta posterior. One sample
+/// every feature of the situation (plus the module-wide statistic), each
+/// estimate being a Beta posterior. A feature never observed for a module
+/// keeps the prior, so that a new kind of situation reopens exploration
+/// instead of inheriting a judgement formed in other situations. One sample
 /// is drawn per estimate and the samples are averaged; the expected cost is
 /// then subtracted. Sampling instead of taking the mean keeps exploring
 /// modules whose usefulness is still uncertain.
@@ -32,6 +34,7 @@ impl<'a> ModuleSelector<'a> {
         random: &mut RandomSource,
     ) -> Option<(usize, SelectionRecord)> {
         let mut evaluations = Vec::with_capacity(candidates.len());
+        let mut best_expected = f64::NEG_INFINITY;
 
         for candidate in candidates {
             let mut posteriors = Vec::new();
@@ -44,13 +47,7 @@ impl<'a> ModuleSelector<'a> {
             {
                 let statistic = self.routing.statistic(candidate.name(), feature);
 
-                if statistic.successes() + statistic.failures() > 0 {
-                    posteriors.push(self.posterior(statistic.successes(), statistic.failures()));
-                }
-            }
-
-            if posteriors.is_empty() {
-                posteriors.push(self.posterior(0, 0));
+                posteriors.push(self.posterior(statistic.successes(), statistic.failures()));
             }
 
             let count = posteriors.len() as f64;
@@ -75,6 +72,8 @@ impl<'a> ModuleSelector<'a> {
             let utility = sampled - self.parameters.cost_weight_per_second() * cost;
 
             evaluations.push((expected, uncertainty, sampled, cost, utility));
+            best_expected =
+                best_expected.max(expected - self.parameters.cost_weight_per_second() * cost);
         }
 
         let (position, (expected, uncertainty, sampled, cost, utility)) = evaluations
@@ -98,6 +97,7 @@ impl<'a> ModuleSelector<'a> {
                 sampled,
                 cost,
                 utility,
+                best_expected,
                 competitors,
             ),
         ))

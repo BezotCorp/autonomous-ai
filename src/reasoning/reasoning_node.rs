@@ -74,8 +74,18 @@ impl ReasoningNode {
         self.validity.is_valid()
     }
 
+    pub(crate) fn step(&self) -> usize {
+        self.step
+    }
+
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Marks the node as changed without altering it, so that modules
+    /// that already examined it consider it again.
+    pub(crate) fn touch(&mut self, revision: u64) {
+        self.revision = revision;
     }
 
     pub(crate) fn invalidate(&mut self, validity: Validity, revision: u64) {

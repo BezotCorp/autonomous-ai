@@ -7,6 +7,7 @@ use crate::memory::invocation_outcome::InvocationOutcome;
 pub(crate) struct ModuleStatistics {
     invocations: u64,
     contributed: u64,
+    advanced: u64,
     retained: u64,
     invalidated: u64,
     unproductive: u64,
@@ -23,6 +24,7 @@ impl ModuleStatistics {
 
         match outcome {
             InvocationOutcome::Contributed => self.contributed += 1,
+            InvocationOutcome::Advanced => self.advanced += 1,
             InvocationOutcome::Retained => self.retained += 1,
             InvocationOutcome::Invalidated => self.invalidated += 1,
             InvocationOutcome::Unproductive => self.unproductive += 1,
