@@ -222,6 +222,14 @@ impl<'a> Imagination<'a> {
 
         for descriptor in intelligence.descriptors() {
             for signature in descriptor.supplied() {
+                // What it could come to know is material too: a question
+                // never asked may concern any of its capabilities.
+                if let Some((predicate, arity)) = signature.rsplit_once('/')
+                    && let Ok(arity) = arity.parse()
+                {
+                    material.predicates.push((predicate.to_owned(), arity));
+                }
+
                 material.myself.push(Statement::new(
                     "capability",
                     vec![

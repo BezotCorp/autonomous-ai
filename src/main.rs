@@ -15,6 +15,7 @@ mod planning;
 mod reasoning;
 mod representation;
 mod resources;
+mod world;
 
 fn main() -> std::process::ExitCode {
     interface::execution::execute()

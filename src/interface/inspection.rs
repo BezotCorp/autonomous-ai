@@ -20,8 +20,10 @@ impl Inspection {
         last: Option<usize>,
         kind: Option<&str>,
         csv: bool,
+        period: (f64, f64),
     ) -> Result<String, Box<dyn Error>> {
         let memory = existence.memory();
+        let (from, to) = period;
 
         Ok(match section {
             "summary" if csv => format!(
@@ -30,6 +32,9 @@ impl Inspection {
                 LifeSummary::of(existence).csv_row()
             ),
             "summary" => LifeSummary::of(existence).to_string(),
+            "report" => {
+                crate::living::period_report::PeriodReport::of(existence, from, to).to_string()
+            }
             "identity" => Self::ron(existence.identity())?,
             "constitution" => Self::ron(existence.constitution())?,
             "dispositions" => Self::ron(existence.dispositions())?,
@@ -96,6 +101,7 @@ impl Inspection {
                     .entries()
                     .iter()
                     .filter(|entry| kind.is_none_or(|kind| entry.event().kind() == kind))
+                    .filter(|entry| entry.lived() >= from && entry.lived() <= to)
                     .collect();
                 let skip = entries.len().saturating_sub(last.unwrap_or(200));
 

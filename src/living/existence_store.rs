@@ -93,8 +93,8 @@ impl ExistenceStore {
         Ok(existence)
     }
 
-    pub(crate) fn save(&self, existence: &Existence) -> Result<(), Box<dyn Error>> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+    /// The bytes of the file an existence is saved as.
+    pub(crate) fn encode(existence: &Existence) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut bytes = Self::MAGIC.to_vec();
 
         bytes.extend_from_slice(&Self::FORMAT_VERSION.to_le_bytes());
@@ -102,6 +102,12 @@ impl ExistenceStore {
             existence,
             bincode_next::config::standard(),
         )?);
+        Ok(bytes)
+    }
+
+    pub(crate) fn save(&self, existence: &Existence) -> Result<(), Box<dyn Error>> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let bytes = Self::encode(existence)?;
 
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
 

@@ -1,6 +1,8 @@
 pub(crate) mod cargo_observation;
+pub(crate) mod communication;
 pub(crate) mod documentation_observation;
 pub(crate) mod dream_interpretation;
+pub(crate) mod environment_observation;
 pub(crate) mod evidence_review;
 pub(crate) mod hypothesis_formation;
 pub(crate) mod imagined_capability;

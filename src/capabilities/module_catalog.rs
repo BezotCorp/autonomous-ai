@@ -47,6 +47,24 @@ impl ModuleCatalog {
         registry
     }
 
+    /// Capabilities of an existence present in an environment: perceiving
+    /// the presences there and transmitting to them. An existence that is
+    /// in no environment has neither.
+    pub(crate) fn in_environment(
+        mut registry: ModuleRegistry,
+        portal: crate::world::portal::Portal,
+    ) -> ModuleRegistry {
+        registry.register(
+            crate::capabilities::environment_observation::EnvironmentObservation::new(
+                portal.clone(),
+            ),
+        );
+        registry.register(crate::capabilities::communication::Communication::new(
+            portal,
+        ));
+        registry
+    }
+
     fn add(registry: &mut ModuleRegistry, offline: bool, module: impl CognitiveModule + 'static) {
         if !(offline && module.descriptor().is_external()) {
             registry.register(module);

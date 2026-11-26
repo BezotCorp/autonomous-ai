@@ -17,6 +17,8 @@ use crate::{
 /// - valid observations are recorded with their provenance, and statements
 ///   missing from a newly observed revision of a scope become obsolete;
 /// - valid deductions that rely on no hypothesis are recorded as derived;
+/// - what other individuals asserted is recorded as reported, never as an
+///   observation; deductions resting on it are not established;
 /// - hypotheses are recorded as such, never as facts; a deduction made
 ///   from a hypothesis and independently observed corroborates it;
 /// - hypotheses withdrawn by belief revision are recorded as refuted.
@@ -70,6 +72,16 @@ impl Consolidation {
                     }
 
                     if knowledge.record_observation(
+                        statement.clone(),
+                        node.provenance().cloned(),
+                        episode,
+                    ) {
+                        summary.observed();
+                    }
+                }
+
+                EpistemicKind::Testimony => {
+                    if knowledge.record_testimony(
                         statement.clone(),
                         node.provenance().cloned(),
                         episode,
@@ -173,12 +185,16 @@ impl Consolidation {
         summary
     }
 
-    /// A deduction is established when none of its supports is a hypothesis.
+    /// A deduction is established when none of its supports is a
+    /// hypothesis or a testimony.
     fn is_established(graph: &ReasoningGraph, node: &ReasoningNode) -> bool {
         graph.ancestors(&[node.id()]).iter().all(|id| {
-            graph
-                .node(*id)
-                .is_some_and(|ancestor| ancestor.kind() != EpistemicKind::Hypothesis)
+            graph.node(*id).is_some_and(|ancestor| {
+                !matches!(
+                    ancestor.kind(),
+                    EpistemicKind::Hypothesis | EpistemicKind::Testimony
+                )
+            })
         })
     }
 

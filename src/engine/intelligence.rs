@@ -853,7 +853,11 @@ impl Intelligence {
         event: &Event,
         live: bool,
     ) -> Vec<(Content, EpistemicKind, Producer, Option<Provenance>)> {
-        let perceived = if live {
+        // What another individual transmitted is its testimony, never an
+        // observation of the world.
+        let perceived = if event.source().starts_with(Event::INDIVIDUAL_SOURCE) {
+            EpistemicKind::Testimony
+        } else if live {
             EpistemicKind::Observation
         } else {
             EpistemicKind::Replay

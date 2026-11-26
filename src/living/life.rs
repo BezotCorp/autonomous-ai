@@ -1,5 +1,9 @@
 use std::{collections::BTreeSet, error::Error, time::Instant};
 
+use crate::{
+    individuality::channel_law::ChannelLaw, living::session::Session, world::portal::Portal,
+};
+
 use uuid::Uuid;
 
 use crate::{
@@ -42,6 +46,7 @@ pub(crate) struct Life<'a> {
     intelligence: &'a Intelligence,
     settings: LifeSettings,
     mailbox: Mailbox,
+    portal: Option<Portal>,
 }
 
 /// What a slice of activity came to.
@@ -91,7 +96,15 @@ impl<'a> Life<'a> {
             intelligence,
             settings,
             mailbox,
+            portal: None,
         }
+    }
+
+    /// Present in an environment, through this portal: messages reach the
+    /// existence as stimuli, and its capabilities may perceive and emit.
+    pub(crate) fn with_portal(mut self, portal: Portal) -> Self {
+        self.portal = Some(portal);
+        self
     }
 
     /// Lives for the session's duration, or until a technical stop is
@@ -101,37 +114,69 @@ impl<'a> Life<'a> {
         existence: &mut Existence,
         store: &ExistenceStore,
     ) -> Result<(), Box<dyn Error>> {
+        let mut session = self.begin_session(existence);
+        let end = session.end();
+
+        self.run(existence, store, &mut session, end)?;
+        self.end_session(existence, store)
+    }
+
+    /// Opens a session (see `open`).
+    pub(crate) fn begin_session(&self, existence: &mut Existence) -> Session {
         self.open(existence);
 
         let start = existence.clock().lived();
-        let end = start + self.settings.duration().max(0.0);
-        // Checkpoints protect against a crash: a technical matter, paced by
-        // wall-clock time whatever the clock of the existence.
-        let mut last_checkpoint = Instant::now();
-        let mut next_sample = start;
-        let mut scheduled = 0;
-        let mut turn = 0_usize;
+
+        Session::new(start, self.settings.duration())
+    }
+
+    /// Closes a session and saves the existence.
+    pub(crate) fn end_session(
+        &self,
+        existence: &mut Existence,
+        store: &ExistenceStore,
+    ) -> Result<(), Box<dyn Error>> {
+        self.sample(existence);
+        existence.record(LifeEvent::SessionClosed);
+        store.save(existence)
+    }
+
+    /// Lives until the lived time `until` (at most the end of the session),
+    /// or a technical stop. Returns whether the session may go on.
+    pub(crate) fn run(
+        &self,
+        existence: &mut Existence,
+        store: &ExistenceStore,
+        session: &mut Session,
+        until: f64,
+    ) -> Result<bool, Box<dyn Error>> {
+        let until = until.min(session.end());
 
         loop {
+            if session.is_stopped() {
+                return Ok(false);
+            }
+
             if self.mailbox.stop_requested() {
                 self.mailbox.clear_stop()?;
                 existence.record(LifeEvent::Intervention {
                     description: "technical stop requested".to_owned(),
                 });
-                break;
+                session.stop();
+                return Ok(false);
             }
 
             let now = existence.clock().lived();
 
-            if now >= end {
-                break;
+            if now >= until {
+                return Ok(now < session.end());
             }
 
-            while let Some(delivery) = self.settings.schedule().get(scheduled)
-                && start + delivery.at() <= now
+            while let Some(delivery) = self.settings.schedule().get(session.scheduled())
+                && session.start() + delivery.at() <= now
             {
                 self.receive(existence, delivery.event().clone());
-                scheduled += 1;
+                session.delivered_scheduled();
             }
 
             let (events, errors) = self.mailbox.collect();
@@ -144,6 +189,8 @@ impl<'a> Life<'a> {
                 self.receive(existence, event);
             }
 
+            self.exchange(existence);
+
             let running: Vec<Uuid> = existence
                 .activities()
                 .running()
@@ -154,17 +201,28 @@ impl<'a> Life<'a> {
                 let next_delivery = self
                     .settings
                     .schedule()
-                    .get(scheduled)
-                    .map_or(f64::INFINITY, |delivery| start + delivery.at() - now);
+                    .get(session.scheduled())
+                    .map_or(f64::INFINITY, |delivery| {
+                        session.start() + delivery.at() - now
+                    });
                 let horizon = [
                     Self::RATE_WINDOW,
-                    end - now,
+                    until - now,
                     next_delivery,
                     if self.settings.clock() == ClockMode::Real {
                         1.0
                     } else {
                         f64::INFINITY
                     },
+                    // The next message known to be on its way.
+                    self.portal.as_ref().and_then(Portal::next_arrival).map_or(
+                        f64::INFINITY,
+                        |arrival| {
+                            self.portal
+                                .as_ref()
+                                .map_or(f64::INFINITY, |portal| portal.lived_at(arrival) - now)
+                        },
+                    ),
                 ]
                 .into_iter()
                 .fold(f64::INFINITY, f64::min)
@@ -172,32 +230,130 @@ impl<'a> Life<'a> {
 
                 self.wait(existence, horizon)?;
             } else {
-                let id = running[turn % running.len()];
-
-                turn = turn.wrapping_add(1);
-
+                let id = running[session.next_turn() % running.len()];
                 let lived = self.slice(existence, id)?;
 
                 self.fade(existence, lived);
                 self.compete(existence, lived);
             }
 
+            self.exchange(existence);
+
             let now = existence.clock().lived();
 
-            if now >= next_sample {
-                existence.organism(self.settings.clock()).0.sample();
-                next_sample = now + Self::SAMPLING;
+            if session.sample_due(now, Self::SAMPLING) {
+                self.sample(existence);
             }
 
-            if last_checkpoint.elapsed().as_secs_f64() >= self.settings.checkpoint() {
+            if session.checkpoint_due(self.settings.checkpoint()) {
                 store.save(existence)?;
-                last_checkpoint = Instant::now();
             }
         }
+    }
 
+    /// Records the latent state and the plastic changes so far.
+    fn sample(&self, existence: &mut Existence) {
         existence.organism(self.settings.clock()).0.sample();
-        existence.record(LifeEvent::SessionClosed);
-        store.save(existence)
+
+        let latent = existence.latent().activation();
+        let channels = Channel::ALL
+            .iter()
+            .map(|channel| {
+                let (bias, term) = existence.dispositions().activation(
+                    existence.constitution(),
+                    *channel,
+                    &latent,
+                );
+
+                ChannelLaw::shape(channel.form(), bias + term)
+            })
+            .collect();
+        let dispositions = existence.dispositions();
+        let coupling_change = dispositions.coupling_change().frobenius();
+        let baseline_change = dispositions
+            .baseline_change()
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt();
+        let engagements = dispositions.engagements();
+
+        existence.record(LifeEvent::Plasticity {
+            channels,
+            coupling_change,
+            baseline_change,
+            engagements,
+        });
+    }
+
+    /// With the environment: follows its time, records what the existence
+    /// emitted, and receives what reached it (once only, whatever the
+    /// interruptions of the processes).
+    fn exchange(&self, existence: &mut Existence) {
+        let Some(portal) = &self.portal else {
+            return;
+        };
+
+        portal.follow(existence.clock().lived());
+
+        for (transmission, to, status) in portal.take_emitted() {
+            existence.record(LifeEvent::Transmitted {
+                transmission,
+                to,
+                status: format!("{status:?}"),
+            });
+        }
+
+        for transmission in portal.receive() {
+            let id = transmission.id().to_string();
+            let known = existence.timeline().entries().iter().any(|entry| {
+                matches!(entry.event(), LifeEvent::StimulusReceived { event, .. } if event == &id)
+            });
+
+            if known {
+                continue;
+            }
+
+            let occurred_at = chrono::Utc::now();
+            let source = format!("{}{}", Event::INDIVIDUAL_SOURCE, transmission.from());
+            let message = transmission.message();
+
+            self.receive(
+                existence,
+                Event::transmitted(
+                    id.clone(),
+                    source.clone(),
+                    occurred_at,
+                    message.statements().to_vec(),
+                    message.documents().to_vec(),
+                    message.questions().to_vec(),
+                ),
+            );
+
+            // What the sender had itself been told keeps its chain of
+            // sources: one perception per chain.
+            let chains: BTreeSet<&String> =
+                message.relayed().iter().map(|(_, chain)| chain).collect();
+
+            for (index, chain) in chains.into_iter().enumerate() {
+                self.receive(
+                    existence,
+                    Event::transmitted(
+                        format!("{id}/relayed/{index}"),
+                        format!("{source} relaying {chain}"),
+                        occurred_at,
+                        message
+                            .relayed()
+                            .iter()
+                            .filter(|(_, from)| from == chain)
+                            .map(|(statement, _)| statement.clone())
+                            .collect(),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                );
+            }
+        }
     }
 
     /// Opens a session: the time elapsed while the process was stopped is
@@ -469,6 +625,26 @@ impl<'a> Life<'a> {
                         .max(1e-12)
                         .ln()
                 };
+
+                // A conscious concern may also be acted upon in reality (the
+                // rate of acting, weighted by its share of salience).
+                if allows(Activity::Action) {
+                    for (id, subject, salience, conscious) in &concerns {
+                        if *conscious {
+                            candidates.push((
+                                Transition::Start(
+                                    Activity::Action,
+                                    Box::new(ActivityFocus::Concern {
+                                        id: *id,
+                                        subject: subject.clone(),
+                                    }),
+                                    ActivityOrigin::Concern(*id),
+                                ),
+                                organism.decision(Channel::Attend, share(true, *salience)),
+                            ));
+                        }
+                    }
+                }
 
                 if allows(Activity::Simulation) {
                     for (id, subject, salience, conscious) in &concerns {
@@ -1119,6 +1295,12 @@ impl<'a> Life<'a> {
 
         let event = match (kind, activity.focus()) {
             (Activity::Action, ActivityFocus::Event(event)) => event.clone(),
+            // Acting on its own concern: a question it gives itself, pursued
+            // in reality with all its capabilities.
+            (Activity::Action, ActivityFocus::Concern { subject, .. }) => Event::internal(
+                format!("initiative-{}", Uuid::now_v7()),
+                vec![subject.clone()],
+            ),
             (Activity::Introspection, _) => {
                 let lived = existence.clock().lived();
 
@@ -1168,9 +1350,18 @@ impl<'a> Life<'a> {
         let ending = match kind {
             _ if abandoned => Some(ActivityEnding::Abandoned),
             Activity::Action if answered => {
-                self.respond(existence, &event, &episode)?;
+                // Only a solicitation from outside expects a reply in the
+                // outbox; nothing is sent back to another individual
+                // automatically.
+                if event.is_external() {
+                    self.respond(existence, &event, &episode)?;
+                }
+
                 Some(ActivityEnding::Completed)
             }
+            // An event asking nothing is done with once it has been
+            // perceived and reasoned upon.
+            Activity::Action if episode.questions().is_empty() => Some(ActivityEnding::Completed),
             Activity::Action => None,
             Activity::Reflection
                 if !episode.corrections().is_empty()
@@ -1228,13 +1419,35 @@ impl<'a> Life<'a> {
                 (random.uniform(), random.weighted(&saliences))
             };
 
-            if self.settings.allows(Activity::Simulation)
+            // Taken up in imagination or in reality, in proportion to the
+            // current rates of simulating and of acting.
+            let (simulate, act) = {
+                let organism = existence.organism(self.settings.clock()).0;
+
+                (
+                    organism.decision(Channel::Simulate, 0.0).rate(),
+                    organism.decision(Channel::Attend, 0.0).rate(),
+                )
+            };
+            let modes: Vec<(Activity, f64)> =
+                [(Activity::Simulation, simulate), (Activity::Action, act)]
+                    .into_iter()
+                    .filter(|(mode, _)| self.settings.allows(*mode))
+                    .collect();
+            let mode = existence
+                .organism(self.settings.clock())
+                .0
+                .random()
+                .weighted(&modes.iter().map(|(_, rate)| *rate).collect::<Vec<_>>())
+                .map(|index| modes[index].0);
+
+            if let Some(mode) = mode
                 && draw < deliberation
                 && let Some(index) = chosen
                 && let Some(concern) = existence.concerns().get(conscious[index])
             {
                 follow = Some(OngoingActivity::new(
-                    Activity::Simulation,
+                    mode,
                     ActivityOrigin::Voluntary(activity.id()),
                     ActivityFocus::Concern {
                         id: concern.id(),

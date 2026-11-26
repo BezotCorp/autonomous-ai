@@ -11,7 +11,8 @@ pub(crate) struct CommandLine {
 
 impl CommandLine {
     /// Options that take no value.
-    const FLAGS: [&'static str; 11] = [
+    const FLAGS: [&'static str; 12] = [
+        "--external",
         "--offline",
         "--neutral",
         "--sandbox",
@@ -51,6 +52,16 @@ impl CommandLine {
         "               dreams corrections influences\n",
         "  autonomous-ai revert <name> --correction <id> [--reason <text>]\n",
         "  autonomous-ai relearn <name>\n",
+        "  autonomous-ai branch <name> <new-name>      (exact copy: same identity, same history)\n",
+        "  autonomous-ai verify <name>                 (decodes and re-encodes the existence)\n",
+        "  autonomous-ai environment create <env> [--seed <n>] [--latency <s>]\n",
+        "                    [--perceptibility <p>] [--external]\n",
+        "  autonomous-ai environment admit|remove <env> <name>\n",
+        "  autonomous-ai environment live <env> [--for <seconds>] [--clock real|virtual]\n",
+        "                    [--without <activity>]... [--without-influences] [--deterministic]\n",
+        "                    [--checkpoint <seconds>] [--dormancy <seconds>]\n",
+        "  autonomous-ai environment inspect <env> [--from <s>] [--to <s>] [--section summary|transmissions]\n",
+        "  (inspect <name> also takes --from <lived s> --to <lived s>, and --section report)\n",
         "  autonomous-ai individuals\n",
         "  autonomous-ai modules\n",
         "Common options: --data <dir>, --resources <dir> (default <data>/resources)",

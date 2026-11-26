@@ -14,6 +14,9 @@ pub(crate) enum Standing {
         reason: String,
         since: chrono::DateTime<chrono::Utc>,
     },
+    /// Only asserted by other individuals: known as what was said, not as
+    /// what holds.
+    Reported,
 }
 
 impl Standing {

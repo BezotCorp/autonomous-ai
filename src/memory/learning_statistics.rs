@@ -32,6 +32,7 @@ pub(crate) struct LearningStatistics {
     knowledge_observed: usize,
     knowledge_derived: usize,
     knowledge_obsolete: usize,
+    knowledge_reported: usize,
     hypotheses_open: usize,
     hypotheses_marked_refuted: usize,
     hypothesis_mean_support: f64,
@@ -124,6 +125,7 @@ impl LearningStatistics {
                 Standing::Observed => statistics.knowledge_observed += 1,
                 Standing::Derived => statistics.knowledge_derived += 1,
                 Standing::Obsolete { .. } => statistics.knowledge_obsolete += 1,
+                Standing::Reported => statistics.knowledge_reported += 1,
             }
         }
 

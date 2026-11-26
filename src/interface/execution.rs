@@ -27,6 +27,10 @@ use crate::{
         episode_summary::EpisodeSummary,
     },
     resources::initial_resources::InitialResources,
+    world::{
+        cohabitation::Cohabitation, environment::Environment,
+        environment_report::EnvironmentReport, environment_store::EnvironmentStore,
+    },
 };
 
 pub(crate) fn execute() -> ExitCode {
@@ -144,7 +148,10 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
         }
         "intervene" => intervene(line),
         "inspect" => {
-            line.accept(&["--section", "--last", "--kind"], &["--csv"])?;
+            line.accept(
+                &["--section", "--last", "--kind", "--from", "--to"],
+                &["--csv"],
+            )?;
 
             let existence = ExistenceStore::read(&ExistenceStore::path(&individual(line)?))?;
 
@@ -154,8 +161,76 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
                 line.number("--last")?,
                 line.value("--kind"),
                 line.flag("--csv"),
+                (
+                    line.number("--from")?.unwrap_or(f64::NEG_INFINITY),
+                    line.number("--to")?.unwrap_or(f64::INFINITY),
+                ),
             )?)
         }
+        "branch" => {
+            line.accept(&[], &[])?;
+
+            let source = individual(line)?;
+            let name = line.positional(1, "the name of the branch")?;
+            let target = directory(line, "individuals", name)?;
+            let bytes = fs::read(ExistenceStore::path(&source))?;
+            // The copy is checked to be readable before being written.
+            let existence = ExistenceStore::read(&ExistenceStore::path(&source))?;
+            let store = ExistenceStore::open(&target)?;
+
+            if store.exists() {
+                return Err(format!("{} already exists", target.display()).into());
+            }
+
+            fs::write(ExistenceStore::path(&target), &bytes)?;
+            fs::write(
+                target.join("branch.ron"),
+                format!(
+                    "(source: {:?}, branched_at: {:?}, bytes: {}, lived: {})\n",
+                    source.display().to_string(),
+                    chrono::Utc::now().to_rfc3339(),
+                    bytes.len(),
+                    existence.clock().lived()
+                ),
+            )?;
+            print(format!(
+                "{} branched into {} ({} bytes, identical; identity and history unchanged)",
+                source.display(),
+                target.display(),
+                bytes.len()
+            ))
+        }
+        "verify" => {
+            line.accept(&[], &[])?;
+
+            let path = ExistenceStore::path(&individual(line)?);
+            let original = fs::read(&path)?;
+            let existence = ExistenceStore::read(&path)?;
+            let encoded = ExistenceStore::encode(&existence)?;
+
+            if encoded != original {
+                return Err(format!(
+                    "{}: re-encoding differs from the file ({} bytes against {})",
+                    path.display(),
+                    encoded.len(),
+                    original.len()
+                )
+                .into());
+            }
+
+            print(format!(
+                "{}: read and re-encoded identically ({} bytes); identity {} born {}, lived {:.0} s, {} episodes, {} knowledge entries, {} timeline entries",
+                path.display(),
+                original.len(),
+                existence.identity().id(),
+                existence.identity().birth().seed(),
+                existence.clock().lived(),
+                existence.memory().experiences().episodes().len(),
+                existence.memory().knowledge().entries().count(),
+                existence.timeline().entries().len()
+            ))
+        }
+        "environment" => environment(line),
         "revert" => {
             line.accept(&["--correction", "--reason"], &[])?;
 
@@ -243,6 +318,161 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
             )?)
         }
         _ => Err(CommandLine::USAGE.into()),
+    }
+}
+
+fn directory(line: &CommandLine, kind: &str, name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err(format!("Invalid name {name}").into());
+    }
+
+    Ok(data(line).join(kind).join(name))
+}
+
+fn environment(line: &CommandLine) -> Result<(), Box<dyn Error>> {
+    let action = line.positional(0, "the environment command")?;
+    let name = line.positional(1, "the name of the environment")?;
+    let place = directory(line, "environments", name)?;
+
+    match action {
+        "create" => {
+            line.accept(
+                &["--seed", "--latency", "--perceptibility"],
+                &["--external"],
+            )?;
+
+            let store = EnvironmentStore::open(&place)?;
+
+            if store.exists() {
+                return Err(format!("{} already exists", place.display()).into());
+            }
+
+            let seed = match line.number("--seed")? {
+                Some(seed) => seed,
+                None => clock_seed()?,
+            };
+            let environment = Environment::new(
+                name.to_owned(),
+                seed,
+                line.number("--latency")?.unwrap_or(60.0),
+                line.number("--perceptibility")?.unwrap_or(1.0),
+                line.flag("--external"),
+            )?;
+
+            store.save(&environment)?;
+            print(EnvironmentReport::of(
+                &environment,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+            ))
+        }
+        "admit" | "remove" => {
+            line.accept(&[], &[])?;
+
+            let member = line.positional(2, "the name of the individual")?;
+
+            if action == "admit"
+                && !ExistenceStore::path(&directory(line, "individuals", member)?).is_file()
+            {
+                return Err(format!("No individual named {member}").into());
+            }
+
+            let store = EnvironmentStore::open(&place)?;
+            let mut environment = store.load()?;
+
+            if action == "admit" {
+                let handle = environment.admit(member.to_owned())?;
+
+                store.save(&environment)?;
+                print(format!("{member} is present in {name} as {handle}"))
+            } else {
+                environment.remove(member)?;
+                store.save(&environment)?;
+                print(format!("{member} left {name}"))
+            }
+        }
+        "live" => {
+            line.accept(
+                &[
+                    "--for",
+                    "--clock",
+                    "--without",
+                    "--checkpoint",
+                    "--dormancy",
+                    "--cost-weight",
+                ],
+                &["--without-influences", "--deterministic"],
+            )?;
+
+            let store = EnvironmentStore::open(&place)?;
+            let clock = match line.value("--clock").unwrap_or("virtual") {
+                "real" => ClockMode::Real,
+                "virtual" => ClockMode::Virtual,
+                other => return Err(format!("Unknown clock {other}: real or virtual").into()),
+            };
+            let excluded = line
+                .all("--without")
+                .iter()
+                .map(|label| Activity::parse(label).ok_or(format!("Unknown activity {label}")))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            let mut settings = LifeSettings::new(
+                clock,
+                line.number("--for")?.unwrap_or(f64::INFINITY),
+                place.clone(),
+            )
+            .without(excluded);
+
+            if let Some(seconds) = line.number("--checkpoint")? {
+                settings = settings.with_checkpoint(seconds);
+            }
+
+            if let Some(seconds) = line.number("--dormancy")? {
+                settings = settings.with_dormancy(seconds);
+            }
+
+            if line.flag("--without-influences") {
+                settings = settings.without_influences();
+            }
+
+            let resources = line
+                .value("--resources")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| data(line).join("resources"));
+
+            Cohabitation::new(data(line), resources, parameters(line)?, settings).live(&store)?;
+            print(EnvironmentReport::of(
+                &store.load()?,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+            ))
+        }
+        "inspect" => {
+            line.accept(&["--from", "--to", "--section"], &[])?;
+
+            let environment = EnvironmentStore::read(&EnvironmentStore::path(&place))?;
+            let from = line.number("--from")?.unwrap_or(f64::NEG_INFINITY);
+            let to = line.number("--to")?.unwrap_or(f64::INFINITY);
+
+            match line.value("--section").unwrap_or("summary") {
+                "summary" => print(EnvironmentReport::of(&environment, from, to)),
+                "transmissions" => print(ron::ser::to_string_pretty(
+                    &environment
+                        .transmissions()
+                        .iter()
+                        .filter(|transmission| {
+                            transmission.emitted_at() >= from && transmission.emitted_at() <= to
+                        })
+                        .collect::<Vec<_>>(),
+                    ron::ser::PrettyConfig::default(),
+                )?),
+                other => Err(format!("Unknown environment section {other}").into()),
+            }
+        }
+        other => Err(format!(
+            "Unknown environment command {other}\n{}",
+            CommandLine::USAGE
+        )
+        .into()),
     }
 }
 

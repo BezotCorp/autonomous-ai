@@ -25,6 +25,9 @@ pub(crate) enum EpistemicKind {
     Computation,
     /// Information the intelligence lacks.
     Need,
+    /// Asserted by another individual: what it said, not what holds. It
+    /// stays defeasible and never establishes a conclusion.
+    Testimony,
 }
 
 impl EpistemicKind {
@@ -35,6 +38,9 @@ impl EpistemicKind {
 
     /// Results that may be withdrawn when a contradiction is traced back to them.
     pub(crate) fn is_defeasible(self) -> bool {
-        matches!(self, Self::Hypothesis | Self::Recollection)
+        matches!(
+            self,
+            Self::Hypothesis | Self::Recollection | Self::Testimony
+        )
     }
 }

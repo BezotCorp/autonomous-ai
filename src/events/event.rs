@@ -16,6 +16,37 @@ pub(crate) struct Event {
 }
 
 impl Event {
+    /// Prefix of the source of events transmitted by another individual.
+    pub(crate) const INDIVIDUAL_SOURCE: &'static str = "individual:";
+
+    /// Event built from a transmission by another individual.
+    pub(crate) fn transmitted(
+        id: String,
+        source: String,
+        occurred_at: DateTime<Utc>,
+        statements: Vec<Statement>,
+        documents: Vec<crate::representation::document::Document>,
+        questions: Vec<Statement>,
+    ) -> Self {
+        Self {
+            id,
+            source,
+            occurred_at,
+            payload: EventPayload::Assertions {
+                statements,
+                rules: Vec::new(),
+                documents,
+            },
+            questions,
+        }
+    }
+
+    /// Whether the event comes from outside any individual (a human or a
+    /// system), as opposed to the individual itself or another one.
+    pub(crate) fn is_external(&self) -> bool {
+        self.source != "self" && !self.source.starts_with(Self::INDIVIDUAL_SOURCE)
+    }
+
     /// Event the intelligence gives itself (e.g. when it decides to
     /// examine its own functioning).
     pub(crate) fn internal(id: String, questions: Vec<Statement>) -> Self {

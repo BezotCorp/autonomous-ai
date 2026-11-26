@@ -35,6 +35,12 @@ impl LifeSettings {
         }
     }
 
+    /// The same conditions for the existence living in another directory.
+    pub(crate) fn in_directory(mut self, directory: PathBuf) -> Self {
+        self.directory = directory;
+        self
+    }
+
     /// Wall-clock seconds between two saves.
     pub(crate) fn with_checkpoint(mut self, seconds: f64) -> Self {
         self.checkpoint = seconds;

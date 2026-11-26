@@ -30,7 +30,11 @@ impl KnowledgeRetrieval {
                 "Recalls persisted statements and hypotheses relevant to the current needs.",
             )
             .consuming(&[ContentKind::Need])
-            .producing(&[EpistemicKind::Recollection, EpistemicKind::Hypothesis]),
+            .producing(&[
+                EpistemicKind::Recollection,
+                EpistemicKind::Hypothesis,
+                EpistemicKind::Testimony,
+            ]),
         }
     }
 }
@@ -71,9 +75,15 @@ impl CognitiveModule for KnowledgeRetrieval {
 
                 if recalled.insert(entry.statement().clone()) {
                     let (provenance, staleness) = knowledge.currency(entry, now, prior);
+                    // What was only reported is recalled as reported.
+                    let kind = if *entry.standing() == crate::memory::standing::Standing::Reported {
+                        EpistemicKind::Testimony
+                    } else {
+                        EpistemicKind::Recollection
+                    };
                     let mut proposal = Proposal::new(
                         Content::Statement(entry.statement().clone()),
-                        EpistemicKind::Recollection,
+                        kind,
                         Vec::new(),
                     )
                     .with_staleness(staleness);

@@ -6,8 +6,9 @@ use crate::living::{life_event::LifeEvent, timeline_entry::TimelineEntry};
 
 /// Chronological record of an existence. Recording never feeds back into
 /// the dynamics: the timeline is written, never read, by the mechanisms
-/// of the individual. Its length is bounded; the oldest entries are
-/// dropped first, and counted by kind.
+/// of the individual. Its length is bounded only against a runaway; were
+/// the bound reached, the oldest entries would be dropped and counted by
+/// kind.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct Timeline {
     entries: VecDeque<TimelineEntry>,
@@ -16,7 +17,10 @@ pub(crate) struct Timeline {
 }
 
 impl Timeline {
-    const MAXIMUM_ENTRIES: usize = 200_000;
+    /// Bound against a runaway, not a retention policy: an existence keeps
+    /// its whole history (about 160 000 entries per 105 virtual days in
+    /// practice). Reports select periods instead of truncating history.
+    const MAXIMUM_ENTRIES: usize = 50_000_000;
 
     pub(crate) fn record(&mut self, lived: f64, event: LifeEvent) {
         *self.totals.entry(event.kind().to_owned()).or_default() += 1;

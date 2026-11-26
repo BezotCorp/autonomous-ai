@@ -92,6 +92,25 @@ pub(crate) enum LifeEvent {
     TechnicalError {
         detail: String,
     },
+    /// The existence emitted a message in its environment.
+    Transmitted {
+        transmission: uuid::Uuid,
+        to: String,
+        status: String,
+    },
+    /// Channel values and plastic changes at a moment, so that their
+    /// evolution over any period can be reported.
+    Plasticity {
+        channels: Vec<f64>,
+        coupling_change: f64,
+        baseline_change: f64,
+        engagements: u64,
+    },
+    /// The existence became present in an environment, under a handle.
+    Present {
+        environment: String,
+        handle: String,
+    },
 }
 
 impl LifeEvent {
@@ -116,6 +135,9 @@ impl LifeEvent {
             Self::Response { .. } => "response",
             Self::Intervention { .. } => "intervention",
             Self::TechnicalError { .. } => "technical_error",
+            Self::Transmitted { .. } => "transmitted",
+            Self::Plasticity { .. } => "plasticity",
+            Self::Present { .. } => "present",
         }
     }
 }

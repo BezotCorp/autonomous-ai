@@ -335,6 +335,27 @@ impl KnowledgeMemory {
         entry.support(Evidence::new(episode, provenance, Vec::new()))
     }
 
+    /// Integrates what another individual asserted. Established knowledge
+    /// keeps its standing (the testimony only adds a justification); a
+    /// statement known from testimony alone is recorded as reported.
+    pub(crate) fn record_testimony(
+        &mut self,
+        statement: Statement,
+        provenance: Option<Provenance>,
+        episode: Uuid,
+    ) -> bool {
+        let entry = self
+            .facts
+            .entry(statement.clone())
+            .or_insert_with(|| KnowledgeEntry::new(statement, Standing::Reported));
+
+        if !entry.standing().is_active() {
+            entry.set_standing(Standing::Reported);
+        }
+
+        entry.support(Evidence::new(episode, provenance, Vec::new()))
+    }
+
     /// Integrates a conclusion established from active knowledge only.
     pub(crate) fn record_derivation(
         &mut self,

@@ -23,6 +23,10 @@ impl TimelineEntry {
         self.lived
     }
 
+    pub(crate) fn wall(&self) -> DateTime<Utc> {
+        self.wall
+    }
+
     pub(crate) fn event(&self) -> &LifeEvent {
         &self.event
     }
