@@ -15,6 +15,8 @@ pub(crate) enum ActivityOrigin {
     Concern(Uuid),
     /// Another activity drifted into it.
     Transformation(Activity),
+    /// A conscious activity deliberately took it up (by its identifier).
+    Voluntary(Uuid),
     /// An experimenter started it (laboratory).
     Intervention,
 }
@@ -26,6 +28,7 @@ impl ActivityOrigin {
             Self::Spontaneous => "spontaneous",
             Self::Concern(_) => "concern",
             Self::Transformation(_) => "transformation",
+            Self::Voluntary(_) => "voluntary",
             Self::Intervention => "intervention",
         }
     }

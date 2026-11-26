@@ -256,6 +256,116 @@ impl LifeSummary {
     }
 }
 
+impl LifeSummary {
+    /// Columns of `csv_row`.
+    pub(crate) fn csv_header() -> String {
+        let mut columns = vec!["name", "seed", "lived", "dormant", "asleep_share"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        for activity in crate::memory::activity::Activity::ALL {
+            columns.push(format!("{}_started", activity.label()));
+            columns.push(format!("{}_seconds", activity.label()));
+        }
+
+        columns.extend(
+            [
+                "voluntary_started",
+                "abandoned",
+                "interrupted",
+                "transformed",
+                "dissolved",
+                "stimuli",
+                "responses",
+                "neglected",
+                "concerns_formed",
+                "concerns_resolved",
+                "concerns_active",
+                "concerns_conscious",
+                "max_concern_activations",
+                "occurrences",
+                "latent_path",
+                "latent_mean_deviation",
+                "coupling_change",
+                "baseline_change",
+                "engagements",
+                "repairs",
+                "technical_errors",
+            ]
+            .map(str::to_owned),
+        );
+        columns.join(",")
+    }
+
+    /// One line of measures, for comparing individuals.
+    pub(crate) fn csv_row(&self) -> String {
+        let mut values = vec![
+            self.name.clone(),
+            self.seed.to_string(),
+            format!("{:.0}", self.lived_seconds),
+            format!("{:.0}", self.dormant_seconds),
+            format!("{:.3}", self.asleep_share),
+        ];
+        let ended = |ending: &str| -> u64 {
+            self.activities
+                .values()
+                .map(|counts| counts.ended.get(ending).copied().unwrap_or(0))
+                .sum()
+        };
+
+        for activity in crate::memory::activity::Activity::ALL {
+            let counts = self.activities.get(activity.label());
+
+            values.push(
+                counts
+                    .map_or(0, |counts| counts.started.values().sum::<u64>())
+                    .to_string(),
+            );
+            values.push(format!(
+                "{:.0}",
+                counts.map_or(0.0, |counts| counts.lived_seconds)
+            ));
+        }
+
+        values.extend([
+            self.activities
+                .values()
+                .map(|counts| counts.started.get("voluntary").copied().unwrap_or(0))
+                .sum::<u64>()
+                .to_string(),
+            ended("abandoned").to_string(),
+            ended("interrupted").to_string(),
+            ended("transformed").to_string(),
+            ended("dissolved").to_string(),
+            self.stimuli_received.to_string(),
+            self.responses.to_string(),
+            self.stimuli_neglected.to_string(),
+            self.concerns_formed.to_string(),
+            self.concerns_resolved.to_string(),
+            self.concerns_active.to_string(),
+            self.concerns_conscious.to_string(),
+            self.most_activated_concerns
+                .first()
+                .map_or(0, |concern| concern.2)
+                .to_string(),
+            self.occurrences.to_string(),
+            format!("{:.2}", self.latent_path),
+            format!(
+                "{:.3}",
+                self.latent_deviation.iter().sum::<f64>()
+                    / self.latent_deviation.len().max(1) as f64
+            ),
+            format!("{:.4}", self.coupling_change),
+            format!("{:.4}", self.baseline_change),
+            self.engagements.to_string(),
+            self.repairs.to_string(),
+            self.technical_errors.to_string(),
+        ]);
+        values.join(",")
+    }
+}
+
 impl fmt::Display for LifeSummary {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let vector = |values: &[f64]| {

@@ -50,6 +50,8 @@ struct SliceOutcome {
     summary: String,
     ending: Option<ActivityEnding>,
     episode: Option<Uuid>,
+    /// An activity the slice deliberately takes up next.
+    follow: Option<OngoingActivity>,
 }
 
 impl<'a> Life<'a> {
@@ -871,6 +873,13 @@ impl<'a> Life<'a> {
             None => {}
         }
 
+        if let Some(follow) = outcome.follow {
+            let signature = format!("deliberate:{}", follow.activity().label());
+
+            self.feel(existence, signature, 1.0);
+            self.begin(existence, follow, None);
+        }
+
         Ok(lived)
     }
 
@@ -1173,8 +1182,10 @@ impl<'a> Life<'a> {
             _ => Some(ActivityEnding::Completed),
         };
 
+        let mut follow = None;
+
         if kind == Activity::Introspection {
-            // Attending to its conscious concerns keeps them alive.
+            // Attending to its conscious concerns changes their salience.
             let gain = self.channel(existence, Channel::ConcernGain);
             let lived = existence.clock().lived();
             let conscious: Vec<Uuid> = existence
@@ -1197,6 +1208,41 @@ impl<'a> Life<'a> {
                     (1.0 + conscious.len() as f64).ln(),
                 );
             }
+
+            // Deliberation: having perceived its concerns, the conscious may
+            // take one up, in proportion to its salience.
+            let deliberation = self.channel(existence, Channel::Deliberation);
+            let saliences: Vec<f64> = conscious
+                .iter()
+                .map(|id| {
+                    existence
+                        .concerns()
+                        .get(*id)
+                        .map_or(0.0, |concern| concern.salience())
+                })
+                .collect();
+            let (draw, chosen) = {
+                let mut organism = existence.organism(self.settings.clock()).0;
+                let random = organism.random();
+
+                (random.uniform(), random.weighted(&saliences))
+            };
+
+            if self.settings.allows(Activity::Simulation)
+                && draw < deliberation
+                && let Some(index) = chosen
+                && let Some(concern) = existence.concerns().get(conscious[index])
+            {
+                follow = Some(OngoingActivity::new(
+                    Activity::Simulation,
+                    ActivityOrigin::Voluntary(activity.id()),
+                    ActivityFocus::Concern {
+                        id: concern.id(),
+                        subject: concern.subject().clone(),
+                    },
+                    lived,
+                ));
+            }
         }
 
         Ok(SliceOutcome {
@@ -1218,6 +1264,7 @@ impl<'a> Life<'a> {
             ),
             ending,
             episode: Some(episode.id()),
+            follow,
         })
     }
 
@@ -1399,6 +1446,7 @@ impl<'a> Life<'a> {
             summary,
             ending: Some(ActivityEnding::Completed),
             episode: None,
+            follow: None,
         }
     }
 }

@@ -153,6 +153,7 @@ fn execute_command(line: &CommandLine) -> Result<(), Box<dyn Error>> {
                 line.value("--section").unwrap_or("summary"),
                 line.number("--last")?,
                 line.value("--kind"),
+                line.flag("--csv"),
             )?)
         }
         "revert" => {

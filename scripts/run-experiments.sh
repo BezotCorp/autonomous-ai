@@ -1,35 +1,36 @@
 #!/usr/bin/env bash
-# Comparative experiments (TODO section 19).
+# Comparative experiments in the laboratory (TODO section 19).
 #
 #   scripts/run-experiments.sh <resources-dir> <events-dir> [runs] [--offline]
 #
-# A training memory is first built by reasoning once over every event.
-# Then, in isolated temporary copies under /tmp, every event is replayed
-# `runs` times under four configurations:
-#   A: no acquired knowledge, no learned routing (empty memory)
+# Every configuration is an individual born from the same seed
+# (AUTONOMOUS_AI_BIRTH_SEED, default 1) in a temporary data directory, so
+# that they share their constitution. A training individual first reasons
+# once over every event. Then every event is submitted `runs` times, as
+# laboratory episodes, to copies of it under four configurations:
+#   A: no acquired knowledge, no learned routing (a newborn)
 #   B: acquired knowledge, no learned routing
 #   C: learned routing, no acquired knowledge
 #   D: acquired knowledge and learned routing
-# A one-line summary per episode, then the statistics of each configuration,
-# are printed at the end (complete reports stay available with `inspect`).
+# Laboratory episodes are neutral (without latent modulation), which keeps
+# them comparable with earlier generations; AUTONOMOUS_AI_LATENT=1 lets the
+# latent state of each individual modulate them instead.
 #
 # With AUTONOMOUS_AI_STUDY=activities, the configurations compare instead
 # the cognitive activities, all with knowledge and routing:
 #   M: action only
-#   U: action and the unconscious (idle --without-dreams)
-#   R: action and dreams (idle --without-reflection)
+#   U: action and the unconscious (living without dream, reverie, simulation)
+#   R: action and imagination (living without reflection, introspection)
 #   F: the complete architecture
 #   N: the complete architecture, the conscious ignoring the influences of
 #      the unconscious (to measure what the influences themselves bring)
-# After each round over the events, the intelligence may undertake up to
-# AUTONOMOUS_AI_IDLE activities (default 10) on its own initiative.
+# After each round over the events, the individual lives
+# AUTONOMOUS_AI_LIVE virtual seconds (default 3600) on its own.
 # With AUTONOMOUS_AI_TEST_EVENTS=<dir>, events never seen during training
-# are then submitted to a copy of each trained memory, to measure
+# are then submitted to a copy of each trained individual, to measure
 # generalisation; their summaries are printed separately.
 # Adding --without-cache to AUTONOMOUS_AI_OPTIONS disables the reuse of
-# acquired data, to tell cognitive gains from technical ones. Statistics of
-# B, C and D also include the training episodes, which ran under the full
-# configuration (label "knowledge=true routing=true").
+# acquired data, to tell cognitive gains from technical ones.
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
@@ -60,6 +61,24 @@ binary="$target/release/autonomous-ai"
 
 workspace=$(mktemp -d /tmp/autonomous-ai-experiments.XXXXXX)
 printf 'Workspace: %s\n' "$workspace" >&2
+birth_seed=${AUTONOMOUS_AI_BIRTH_SEED:-1}
+neutral=(--neutral)
+
+if [ "${AUTONOMOUS_AI_LATENT:-}" = 1 ]; then
+  neutral=()
+fi
+
+birth() {
+  "$binary" birth "$1" --seed "$birth_seed" --data "$workspace" >/dev/null
+}
+
+duplicate() {
+  "$binary" duplicate "$1" "$2" --data "$workspace" >/dev/null
+}
+
+inspect() {
+  "$binary" inspect "$1" --data "$workspace" --resources "$resources" --section "$2"
+}
 
 mapfile -t files < <(find "$events" -maxdepth 1 -name '*.ron' | sort)
 
@@ -69,30 +88,31 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 
 run() {
-  local memory=$1 seed=$2 event=$3
+  local individual=$1 seed=$2 event=$3
   shift 3
-  "$binary" run --memory "$memory" --resources "$resources" --seed "$seed" \
-    "${extra[@]}" "$@" <"$event" >/dev/null
+  "$binary" episode "$individual" --data "$workspace" --resources "$resources" \
+    --seed "$seed" "${neutral[@]}" "${extra[@]}" "$@" <"$event" >/dev/null
 }
 
 seed=1
+birth training
 
 for event in "${files[@]}"; do
-  run "$workspace/training.bin" "$seed" "$event"
+  run training "$seed" "$event"
   seed=$((seed + 1))
 done
 
-idle_options=()
+live_options=(--clock virtual --deterministic --for "${AUTONOMOUS_AI_LIVE:-3600}")
 
 if [ "${4:-}" = "--offline" ]; then
-  idle_options+=(--offline)
+  live_options+=(--offline)
 fi
 
-idle() {
-  local memory=$1 seed=$2
-  shift 2
-  "$binary" idle --memory "$memory" --resources "$resources" --seed "$seed" \
-    --max-activities "${AUTONOMOUS_AI_IDLE:-10}" "${idle_options[@]}" "$@"
+live() {
+  local individual=$1
+  shift
+  "$binary" live "$individual" --data "$workspace" --resources "$resources" \
+    "${live_options[@]}" "$@" | sed -n '1,12p'
 }
 
 if [ "${AUTONOMOUS_AI_STUDY:-}" = activities ]; then
@@ -100,10 +120,10 @@ if [ "${AUTONOMOUS_AI_STUDY:-}" = activities ]; then
   declare -A flags=([M]="" [U]="" [R]="" [F]="" [N]="--without-influences")
   declare -A activities=(
     [M]=""
-    [U]="--without-dreams"
-    [R]="--without-reflection"
+    [U]="--without dream --without reverie --without simulation"
+    [R]="--without reflection --without introspection"
     [F]="--"
-    [N]="--"
+    [N]="--without-influences"
   )
 else
   configurations=(A B C D)
@@ -117,43 +137,44 @@ else
 fi
 
 for configuration in "${configurations[@]}"; do
-  memory="$workspace/$configuration.bin"
+  individual=$configuration
 
-  if [ "$configuration" != A ]; then
-    cp "$workspace/training.bin" "$memory"
+  if [ "$configuration" = A ]; then
+    birth "$individual"
+  else
+    duplicate training "$individual"
   fi
 
   for ((iteration = 0; iteration < runs; iteration++)); do
     for event in "${files[@]}"; do
       # shellcheck disable=SC2086
-      run "$memory" "$seed" "$event" ${flags[$configuration]}
+      run "$individual" "$seed" "$event" ${flags[$configuration]}
       seed=$((seed + 1))
     done
 
     if [ -n "${activities[$configuration]}" ]; then
       printf '\n--- %s: activities after round %d\n' "$configuration" "$((iteration + 1))"
       # shellcheck disable=SC2086
-      idle "$memory" "$seed" $(printf '%s' "${activities[$configuration]}" | sed 's/^--$//')
+      live "$individual" $(printf '%s' "${activities[$configuration]}" | sed 's/^--$//')
       seed=$((seed + 1))
     fi
   done
 
   printf '\n=== Configuration %s (%s)\n' "$configuration" "${flags[$configuration]:-${activities[$configuration]:-default}}"
-  "$binary" inspect --memory "$memory" --section summary
-  "$binary" inspect --memory "$memory" --section statistics
+  inspect "$individual" episodes
+  inspect "$individual" statistics
 
   if [ -n "${AUTONOMOUS_AI_TEST_EVENTS:-}" ]; then
-    test_memory="$workspace/$configuration.test.bin"
-    cp "$memory" "$test_memory"
-    before=$("$binary" inspect --memory "$test_memory" --section summary | wc -l)
+    duplicate "$individual" "$individual-test"
+    before=$(inspect "$individual-test" episodes | wc -l)
 
     for event in $(find "$AUTONOMOUS_AI_TEST_EVENTS" -maxdepth 1 -name '*.ron' | sort); do
       # shellcheck disable=SC2086
-      run "$test_memory" "$seed" "$event" ${flags[$configuration]}
+      run "$individual-test" "$seed" "$event" ${flags[$configuration]}
       seed=$((seed + 1))
     done
 
     printf '\n=== Configuration %s on unseen events\n' "$configuration"
-    "$binary" inspect --memory "$test_memory" --section summary | sed -n "1p;$((before + 1)),\$p"
+    inspect "$individual-test" episodes | sed -n "1p;$((before + 1)),\$p"
   fi
 done

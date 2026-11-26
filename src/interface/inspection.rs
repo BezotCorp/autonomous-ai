@@ -19,10 +19,16 @@ impl Inspection {
         section: &str,
         last: Option<usize>,
         kind: Option<&str>,
+        csv: bool,
     ) -> Result<String, Box<dyn Error>> {
         let memory = existence.memory();
 
         Ok(match section {
+            "summary" if csv => format!(
+                "{}\n{}",
+                LifeSummary::csv_header(),
+                LifeSummary::of(existence).csv_row()
+            ),
             "summary" => LifeSummary::of(existence).to_string(),
             "identity" => Self::ron(existence.identity())?,
             "constitution" => Self::ron(existence.constitution())?,

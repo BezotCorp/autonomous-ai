@@ -61,6 +61,9 @@ pub(crate) enum Channel {
     ConcernGain,
     /// Probability that imagination goes on to another scene.
     SceneContinuation,
+    /// Probability that an introspection which perceived conscious
+    /// concerns deliberately takes one of them up.
+    Deliberation,
     /// Relative weights of the mechanisms of imagination.
     Recollection,
     Association,
@@ -73,7 +76,7 @@ pub(crate) enum Channel {
 }
 
 impl Channel {
-    pub(crate) const ALL: [Self; 29] = [
+    pub(crate) const ALL: [Self; 30] = [
         Self::Attend,
         Self::Reflect,
         Self::Introspect,
@@ -95,6 +98,7 @@ impl Channel {
         Self::Surfacing,
         Self::ConcernGain,
         Self::SceneContinuation,
+        Self::Deliberation,
         Self::Recollection,
         Self::Association,
         Self::Transformation,
@@ -132,9 +136,10 @@ impl Channel {
             | Self::Transform
             | Self::ConcernFading
             | Self::Surfacing => ChannelForm::Rate,
-            Self::InfluenceAdmission | Self::SceneContinuation | Self::Abandonment => {
-                ChannelForm::Probability
-            }
+            Self::InfluenceAdmission
+            | Self::SceneContinuation
+            | Self::Abandonment
+            | Self::Deliberation => ChannelForm::Probability,
             _ => ChannelForm::Factor,
         }
     }
