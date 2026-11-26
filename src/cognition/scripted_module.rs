@@ -1,8 +1,10 @@
 use crate::{
+    acquisition::access_mode::AccessMode,
     cognition::{
         cognitive_module::CognitiveModule, module_context::ModuleContext,
         module_descriptor::ModuleDescriptor, module_output::ModuleOutput, proposal::Proposal,
     },
+    memory::cached_response::CachedResponse,
     reasoning::epistemic_kind::EpistemicKind,
     representation::{
         bindings::Bindings, content::Content, content_kind::ContentKind, provenance::Provenance,
@@ -50,6 +52,24 @@ impl ScriptedModule {
         self
     }
 
+    fn record_key(&self) -> String {
+        format!("scripted:{}", self.descriptor.name())
+    }
+
+    /// Records what it acquired, as a real acquisition module would.
+    fn record(&self, context: &ModuleContext<'_>, statements: &[Statement]) {
+        let body = statements
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        context
+            .access()
+            .store()
+            .put(&self.record_key(), CachedResponse::mutable(body, None));
+    }
+
     fn observation(&self, statement: Statement) -> Proposal {
         let proposal = Proposal::new(
             Content::Statement(statement),
@@ -85,6 +105,21 @@ impl CognitiveModule for ScriptedModule {
             return Ok(output);
         }
 
+        // In a replay, it can only reproduce what it recorded while live.
+        if let AccessMode::Replay { as_of, .. } = context.access().mode() {
+            let recorded = context
+                .access()
+                .store()
+                .recorded(&self.record_key(), as_of)
+                .ok_or_else(|| format!("{}: not recorded, left missing", self.descriptor.name()))?;
+
+            for line in recorded.body().lines() {
+                output.propose(self.observation(line.parse()?));
+            }
+
+            return Ok(output);
+        }
+
         if let Some((resource, units)) = &self.consumption {
             let meter = context.access().meter();
 
@@ -93,6 +128,7 @@ impl CognitiveModule for ScriptedModule {
         }
 
         let Some(prerequisite) = &self.prerequisite else {
+            self.record(context, std::slice::from_ref(&self.template));
             output.propose(self.observation(self.template.clone()));
             return Ok(output);
         };
@@ -111,8 +147,17 @@ impl CognitiveModule for ScriptedModule {
             ));
         }
 
-        for bindings in matches {
-            output.propose(self.observation(bindings.apply(&self.template)));
+        let observed: Vec<Statement> = matches
+            .iter()
+            .map(|bindings| bindings.apply(&self.template))
+            .collect();
+
+        if !observed.is_empty() {
+            self.record(context, &observed);
+        }
+
+        for statement in observed {
+            output.propose(self.observation(statement));
         }
 
         Ok(output)

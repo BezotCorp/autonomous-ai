@@ -1,7 +1,8 @@
 use crate::{
     capabilities::{
         cargo_observation::CargoObservation, documentation_observation::DocumentationObservation,
-        hypothesis_formation::HypothesisFormation, knowledge_retrieval::KnowledgeRetrieval,
+        evidence_review::EvidenceReview, hypothesis_formation::HypothesisFormation,
+        knowledge_retrieval::KnowledgeRetrieval, learning_review::LearningReview,
         linguistic_analysis::LinguisticAnalysis, logical_inference::LogicalInference,
         mathematical_reasoning::MathematicalReasoning, relational_analysis::RelationalAnalysis,
         release_observation::ReleaseObservation, repository_discovery::RepositoryDiscovery,
@@ -32,6 +33,8 @@ impl ModuleCatalog {
         );
         Self::add(&mut registry, offline, KnowledgeRetrieval::new());
         Self::add(&mut registry, offline, StrategicPlanning::new());
+        Self::add(&mut registry, offline, EvidenceReview::new());
+        Self::add(&mut registry, offline, LearningReview::new());
         Self::add(&mut registry, offline, LinguisticAnalysis::new());
         Self::add(&mut registry, offline, RepositoryDiscovery::new());
         Self::add(&mut registry, offline, CargoObservation::new());

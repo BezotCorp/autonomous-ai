@@ -42,7 +42,7 @@ impl Consolidation {
             };
 
             match node.kind() {
-                EpistemicKind::Observation => {
+                EpistemicKind::Observation | EpistemicKind::Replay => {
                     if let Some(provenance) = node.provenance()
                         && let Some(scope) = provenance.scope()
                     {
@@ -128,7 +128,9 @@ impl Consolidation {
                 graph.node(id).is_some_and(|other| {
                     matches!(
                         other.kind(),
-                        EpistemicKind::Observation | EpistemicKind::Recollection
+                        EpistemicKind::Observation
+                            | EpistemicKind::Replay
+                            | EpistemicKind::Recollection
                     )
                 })
             });

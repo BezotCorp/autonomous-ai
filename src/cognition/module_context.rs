@@ -55,6 +55,10 @@ impl<'a> ModuleContext<'a> {
         self.environment.capabilities()
     }
 
+    pub(crate) fn memory(&self) -> &'a crate::memory::persistent_memory::PersistentMemory {
+        self.environment.memory()
+    }
+
     pub(crate) fn parameters(&self) -> &'a LearningParameters {
         self.environment.parameters()
     }

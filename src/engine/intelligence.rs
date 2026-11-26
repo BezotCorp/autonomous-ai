@@ -7,22 +7,26 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
-    acquisition::external_access::ExternalAccess,
+    acquisition::{access_mode::AccessMode, external_access::ExternalAccess},
     cognition::{
         capability_model::CapabilityModel, module_context::ModuleContext,
-        module_environment::ModuleEnvironment, module_registry::ModuleRegistry, proposal::Proposal,
+        module_descriptor::ModuleDescriptor, module_environment::ModuleEnvironment,
+        module_registry::ModuleRegistry, proposal::Proposal,
     },
     consumables::resource_meter::ResourceMeter,
     engine::{
         belief_revision::BeliefRevision, candidate::Candidate, consolidation::Consolidation,
         episode_report::EpisodeReport, impasse_diagnosis::ImpasseDiagnosis,
-        learning_parameters::LearningParameters, module_selector::ModuleSelector,
-        perception::Perception, question_answering::QuestionAnswering,
+        learning_parameters::LearningParameters, memory_correction::MemoryCorrection,
+        module_selector::ModuleSelector, perception::Perception,
+        question_answering::QuestionAnswering,
     },
     events::event::Event,
     mathematics::random_source::RandomSource,
     memory::{
-        episode_configuration::EpisodeConfiguration, episode_record::EpisodeRecord,
+        acquisition_cache::AcquisitionCache, correction::Correction,
+        correction_basis::CorrectionBasis, episode_configuration::EpisodeConfiguration,
+        episode_record::EpisodeRecord, experiment_request::ExperimentRequest,
         invocation_outcome::InvocationOutcome, invocation_record::InvocationRecord,
         knowledge_exploitation::KnowledgeExploitation, knowledge_memory::KnowledgeMemory,
         persistent_memory::PersistentMemory, revision_record::RevisionRecord,
@@ -61,6 +65,8 @@ struct EpisodeTrace {
     withdrawn: Vec<(NodeId, String)>,
     plans: Vec<PlanRecord>,
     exploitation: KnowledgeExploitation,
+    corrections: Vec<(Correction, CorrectionBasis, String)>,
+    experiments: Vec<ExperimentRequest>,
 }
 
 /// What came out of integrating the proposals of one invocation.
@@ -82,6 +88,13 @@ impl Intelligence {
             resources,
             parameters,
         }
+    }
+
+    pub(crate) fn descriptors(&self) -> impl Iterator<Item = &ModuleDescriptor> {
+        self.registry
+            .modules()
+            .iter()
+            .map(|module| module.descriptor())
     }
 
     pub(crate) fn reason(
@@ -114,13 +127,29 @@ impl Intelligence {
             &empty_routing
         };
 
-        let access = ExternalAccess::new(
-            ResourceMeter::new(
-                memory.resources().clone(),
-                configuration.resource_budgets().clone(),
-            ),
-            memory.acquisitions(),
+        // Replays (dreams) reach nothing outside: they only read what was
+        // recorded, and start without the live state of the resources.
+        let empty_cache = AcquisitionCache::default();
+        let cache = if configuration.acquisition_cache() {
+            memory.acquisitions()
+        } else {
+            &empty_cache
+        };
+        let live = configuration.access() == AccessMode::Live;
+        let meter = ResourceMeter::new(
+            if live {
+                memory.resources().clone()
+            } else {
+                BTreeMap::new()
+            },
+            configuration.resource_budgets().clone(),
         );
+        let access = match configuration.access() {
+            AccessMode::Live => ExternalAccess::new(meter, cache),
+            AccessMode::Replay { as_of, since } => {
+                ExternalAccess::replay(meter, cache, as_of, since)
+            }
+        };
 
         let mut initial_errors = Vec::new();
 
@@ -157,6 +186,7 @@ impl Intelligence {
             &access,
             &capabilities,
             &self.parameters,
+            memory,
         );
 
         let selector = ModuleSelector::new(routing, &self.parameters);
@@ -180,13 +210,15 @@ impl Intelligence {
             }
 
             let active_plan = trace.plans.iter().rev().find(|record| record.is_active());
-            let candidates = self.candidates(
+            let mut candidates = self.candidates(
                 &working,
                 &seen,
                 previous.as_deref(),
                 &remembered,
                 active_plan,
             );
+
+            candidates.retain(|candidate| !configuration.excludes(candidate.name()));
 
             let Some((position, selection)) =
                 selector.select(&candidates, access.meter(), &mut random)
@@ -226,16 +258,31 @@ impl Intelligence {
             seen[index] = revision_before;
 
             let (integration, notes, plan, error) = match result {
-                Ok(output) => {
-                    let (proposals, notes, plan) = output.into_parts();
-                    let integration = Self::integrate(
+                Ok(mut output) => {
+                    let (corrections, experiments) = output.take_reflections();
+                    let (proposals, mut notes, plan) = output.into_parts();
+                    let mut integration = Self::integrate(
                         &mut working,
                         &mut trace,
                         descriptor.name(),
                         |kind| descriptor.produces(kind),
                         proposals,
                         step,
+                        !live,
                     );
+
+                    if descriptor.reflects() {
+                        notes.extend(corrections.iter().map(|(correction, _, _)| {
+                            format!("proposed correction: {correction}")
+                        }));
+                        trace.corrections.extend(corrections);
+                        trace.experiments.extend(experiments);
+                    } else if !corrections.is_empty() || !experiments.is_empty() {
+                        integration.rejected.push(format!(
+                            "corrections or experiments proposed by {}, which is not reflective",
+                            descriptor.name()
+                        ));
+                    }
 
                     (integration, notes, plan, None)
                 }
@@ -288,6 +335,7 @@ impl Intelligence {
             previous = Some(descriptor.name().to_owned());
         };
 
+        let mut notes_from_corrections = Vec::new();
         let graph = working.graph();
         let mut answers = Vec::new();
         let mut support = BTreeSet::new();
@@ -328,14 +376,41 @@ impl Intelligence {
         let (_, store) = access.into_parts();
         let (stored, used) = store.into_parts();
 
-        *memory.resources_mut() = resource_states.clone();
-        memory.acquisitions_mut().integrate(stored, used);
+        if live {
+            *memory.resources_mut() = resource_states.clone();
+
+            if configuration.acquisition_cache() {
+                memory.acquisitions_mut().integrate(stored, used);
+            }
+        }
+
+        // What the examination of the cognition concluded: corrections are
+        // applied (journaled and reversible), experiments queued.
+        let mut corrections = Vec::new();
+
+        for (correction, basis, justification) in trace.corrections {
+            let description = correction.to_string();
+
+            match MemoryCorrection::apply(memory, episode, correction, basis, justification) {
+                Ok(id) => corrections.push(format!("{id}: {description}")),
+                Err(error) => notes_from_corrections.push(error),
+            }
+        }
+
+        let mut experiments = Vec::new();
+
+        for request in trace.experiments {
+            if memory.dreams_mut().request(request.clone()) {
+                experiments.push(request);
+            }
+        }
 
         let (knowledge_memory, routing_memory, experiences) = memory.parts_mut();
 
         let changes = Consolidation::integrate(graph, knowledge_memory, episode, &trace.withdrawn);
 
         let mut notes = initial_errors;
+        notes.append(&mut notes_from_corrections);
         notes.sort();
 
         let record = EpisodeRecord::new(
@@ -359,7 +434,9 @@ impl Intelligence {
             total_usage,
             resource_states,
             trace.exploitation,
-        );
+        )
+        .with_reflection(corrections, experiments)
+        .with_event(event.clone());
 
         routing_memory.learn(&record);
         experiences.record(record.clone());
@@ -598,6 +675,7 @@ impl Intelligence {
         allowed: impl Fn(EpistemicKind) -> bool,
         proposals: Vec<Proposal>,
         step: usize,
+        replaying: bool,
     ) -> Integration {
         let mut integration = Integration::default();
         let current_scopes = Self::current_scopes(working.graph());
@@ -633,6 +711,13 @@ impl Intelligence {
             }
 
             let (content, kind, premises, provenance) = proposal.into_parts();
+            // In a dream, what modules observe was only reproduced from
+            // recorded data: it is never a new observation of the world.
+            let kind = if replaying && kind == EpistemicKind::Observation {
+                EpistemicKind::Replay
+            } else {
+                kind
+            };
             let feature = content.feature();
             let description = content.to_string();
             let scope = provenance.as_ref().and_then(|provenance| {
@@ -665,7 +750,7 @@ impl Intelligence {
                         }
                     }
 
-                    if kind == EpistemicKind::Observation {
+                    if kind.is_observed() {
                         if let Some((scope, revision)) = scope {
                             observed.entry(scope).or_insert((revision, insertion.id()));
                         }
@@ -695,7 +780,7 @@ impl Intelligence {
         let mut scopes: BTreeMap<(String, String), BTreeSet<Option<String>>> = BTreeMap::new();
 
         for node in graph.valid_nodes() {
-            if node.kind() != EpistemicKind::Observation {
+            if !node.kind().is_observed() {
                 continue;
             }
 

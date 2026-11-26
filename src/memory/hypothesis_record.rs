@@ -1,15 +1,17 @@
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    memory::hypothesis_status::HypothesisStatus,
+    memory::{hypothesis_status::HypothesisStatus, knowledge_origin::KnowledgeOrigin},
     representation::{rule::Rule, statement::Statement},
 };
 
 /// Persisted conjecture. A hypothesis never becomes a fact: it only
-/// accumulates independent corroborations or gets refuted.
+/// accumulates independent corroborations or gets refuted. Its origin
+/// tells whether it was induced while acting or while dreaming.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct HypothesisRecord {
     rule: Rule,
@@ -18,6 +20,9 @@ pub(crate) struct HypothesisRecord {
     corroborations: BTreeSet<Statement>,
     refutations: Vec<String>,
     status: HypothesisStatus,
+    proposed_at: DateTime<Utc>,
+    refuted_at: Option<DateTime<Utc>>,
+    origin: KnowledgeOrigin,
 }
 
 impl HypothesisRecord {
@@ -29,7 +34,44 @@ impl HypothesisRecord {
             corroborations: BTreeSet::new(),
             refutations: Vec::new(),
             status: HypothesisStatus::Open,
+            proposed_at: Utc::now(),
+            refuted_at: None,
+            origin: KnowledgeOrigin::Experience,
         }
+    }
+
+    pub(crate) fn with_origin(mut self, origin: KnowledgeOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    pub(crate) fn origin(&self) -> KnowledgeOrigin {
+        self.origin
+    }
+
+    pub(crate) fn corroborations(&self) -> &BTreeSet<Statement> {
+        &self.corroborations
+    }
+
+    /// Withdraws a refutation (when what refuted it turned out unfounded).
+    pub(crate) fn reopen(&mut self) {
+        self.status = HypothesisStatus::Open;
+        self.refuted_at = None;
+    }
+
+    /// State of the hypothesis at an earlier instant, if it existed then.
+    pub(crate) fn as_of(&self, at: DateTime<Utc>) -> Option<Self> {
+        if self.proposed_at > at {
+            return None;
+        }
+
+        let mut past = self.clone();
+
+        if self.refuted_at.is_some_and(|refuted| refuted > at) {
+            past.reopen();
+        }
+
+        Some(past)
     }
 
     pub(crate) fn rule(&self) -> &Rule {
@@ -54,5 +96,6 @@ impl HypothesisRecord {
     pub(crate) fn refute(&mut self, reason: String) {
         self.refutations.push(reason);
         self.status = HypothesisStatus::Refuted;
+        self.refuted_at = Some(Utc::now());
     }
 }

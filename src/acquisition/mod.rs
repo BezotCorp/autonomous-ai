@@ -1,3 +1,4 @@
+pub(crate) mod access_mode;
 pub(crate) mod cargo_lockfile;
 pub(crate) mod cargo_manifest;
 pub(crate) mod constants;

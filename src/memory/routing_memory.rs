@@ -3,10 +3,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    mathematics::beta_distribution::BetaDistribution,
     memory::{
-        cost_statistic::CostStatistic, episode_record::EpisodeRecord,
-        experience_memory::ExperienceMemory, moving_average::MovingAverage,
-        routing_statistic::RoutingStatistic,
+        correction_journal::CorrectionJournal, cost_statistic::CostStatistic,
+        dream_memory::DreamMemory, episode_record::EpisodeRecord,
+        experience_memory::ExperienceMemory, invocation_outcome::InvocationOutcome,
+        moving_average::MovingAverage, routing_statistic::RoutingStatistic,
     },
     planning::{plan::Plan, plan_status::PlanStatus, strategy_statistic::StrategyStatistic},
 };
@@ -16,35 +18,132 @@ use crate::{
 /// usually need first, and which strategies worked for which kinds of
 /// goals. It is entirely derived from the experience register and can
 /// therefore be recomputed at any time.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct RoutingMemory {
     statistics: BTreeMap<String, BTreeMap<String, RoutingStatistic>>,
     costs: BTreeMap<String, CostStatistic>,
     consumption: BTreeMap<String, BTreeMap<String, MovingAverage>>,
     prerequisites: BTreeMap<String, BTreeMap<String, u64>>,
     strategies: BTreeMap<String, BTreeMap<String, StrategyStatistic>>,
+    simulated: BTreeMap<String, BTreeMap<String, RoutingStatistic>>,
     episodes_learned: usize,
+    dreams_learned: usize,
 }
 
 impl RoutingMemory {
     /// Feature shared by every situation, giving a module-wide estimate.
     pub(crate) const GLOBAL_FEATURE: &'static str = "*";
 
-    pub(crate) fn rebuild(experiences: &ExperienceMemory) -> Self {
+    /// Relearns everything: real experiences, with the outcomes re-examined
+    /// since, then dreams, kept apart as simulated experience.
+    pub(crate) fn rebuild(
+        experiences: &ExperienceMemory,
+        dreams: &DreamMemory,
+        corrections: &CorrectionJournal,
+    ) -> Self {
         let mut memory = Self::default();
 
         for episode in experiences.episodes() {
-            memory.learn(episode);
+            memory.learn_with(episode, corrections.reassessments());
+        }
+
+        for dream in dreams.dreams() {
+            if let Some(episode) = dream.episode() {
+                memory.learn_simulated(episode);
+            }
         }
 
         memory
     }
 
     pub(crate) fn learn(&mut self, episode: &EpisodeRecord) {
+        self.learn_with(episode, &BTreeMap::new());
+    }
+
+    /// Learns from a dream: which modules proved useful in simulation and
+    /// which strategies reached their goals. Kept apart from real outcomes.
+    pub(crate) fn learn_simulated(&mut self, episode: &EpisodeRecord) {
         let questions_asked = !episode.questions().is_empty();
 
         for invocation in episode.invocations() {
             let success = invocation.outcome().is_success(questions_asked);
+            let statistics = self
+                .simulated
+                .entry(invocation.module().to_owned())
+                .or_default();
+
+            for feature in invocation
+                .selection()
+                .features()
+                .iter()
+                .map(String::as_str)
+                .chain([Self::GLOBAL_FEATURE])
+            {
+                statistics
+                    .entry(feature.to_owned())
+                    .or_default()
+                    .observe(success);
+            }
+        }
+
+        for record in episode.plans() {
+            if record.status() == PlanStatus::Active {
+                continue;
+            }
+
+            self.strategies
+                .entry(Plan::goal_key(record.plan().goals()))
+                .or_default()
+                .entry(record.plan().strategy().to_owned())
+                .or_default()
+                .observe_simulated(record.achieved(), record.actual_cost());
+        }
+
+        self.dreams_learned += 1;
+    }
+
+    /// Posterior success probability of a module in situations sharing a
+    /// feature: real outcomes count fully, simulated ones (from dreams)
+    /// with the given weight, on top of the prior.
+    pub(crate) fn estimate(
+        &self,
+        module: &str,
+        feature: &str,
+        prior: (f64, f64),
+        simulation_weight: f64,
+    ) -> BetaDistribution {
+        let real = self.statistic(module, feature);
+        let simulated = self.simulated_statistic(module, feature);
+
+        BetaDistribution::posterior(
+            prior.0 + simulation_weight * simulated.successes() as f64,
+            prior.1 + simulation_weight * simulated.failures() as f64,
+            real.successes(),
+            real.failures(),
+        )
+    }
+
+    pub(crate) fn simulated_statistic(&self, module: &str, feature: &str) -> RoutingStatistic {
+        self.simulated
+            .get(module)
+            .and_then(|statistics| statistics.get(feature))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn learn_with(
+        &mut self,
+        episode: &EpisodeRecord,
+        reassessments: &BTreeMap<(uuid::Uuid, usize), InvocationOutcome>,
+    ) {
+        let questions_asked = !episode.questions().is_empty();
+
+        for invocation in episode.invocations() {
+            let outcome = reassessments
+                .get(&(episode.id(), invocation.step()))
+                .copied()
+                .unwrap_or(invocation.outcome());
+            let success = outcome.is_success(questions_asked);
             let statistics = self
                 .statistics
                 .entry(invocation.module().to_owned())

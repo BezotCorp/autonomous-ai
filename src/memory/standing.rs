@@ -8,8 +8,12 @@ pub(crate) enum Standing {
     Observed,
     /// Deduced from established knowledge, without relying on hypotheses.
     Derived,
-    /// No longer observed in the latest revision of its source.
-    Obsolete { reason: String },
+    /// No longer observed in the latest revision of its source, or
+    /// corrected; `since` dates the change so past states can be rebuilt.
+    Obsolete {
+        reason: String,
+        since: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 impl Standing {

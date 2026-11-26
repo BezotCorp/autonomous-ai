@@ -98,6 +98,12 @@ impl CognitiveModule for DocumentationObservation {
                     meter.avoid();
                     entry.into_mut()
                 }
+                std::collections::btree_map::Entry::Vacant(_) if !context.access().is_live() => {
+                    output.note(format!(
+                        "{package}@{version}: documentation not recorded, left missing in replay"
+                    ));
+                    continue;
+                }
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     let documentation = DocumentationProvider::acquire(&package, &version);
 

@@ -8,7 +8,7 @@ use crate::{
     memory::{
         change_prior::ChangePrior, evidence::Evidence, hypothesis_record::HypothesisRecord,
         hypothesis_status::HypothesisStatus, knowledge_entry::KnowledgeEntry,
-        scope_history::ScopeHistory, standing::Standing,
+        knowledge_origin::KnowledgeOrigin, scope_history::ScopeHistory, standing::Standing,
     },
     representation::{
         bindings::Bindings, provenance::Provenance, rule::Rule, statement::Statement,
@@ -23,7 +23,7 @@ use crate::{
 /// of a source, when it was last verified and how often it changed, so
 /// that a recollection is never mistaken for a verification of the
 /// present state.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct KnowledgeMemory {
     facts: BTreeMap<Statement, KnowledgeEntry>,
     hypotheses: BTreeMap<Rule, HypothesisRecord>,
@@ -144,6 +144,94 @@ impl KnowledgeMemory {
 
         best.unwrap_or((None, 0.0))
     }
+    /// The knowledge as it stood at an earlier instant: only evidence
+    /// recorded by then, standings and refutations dated before it.
+    pub(crate) fn as_of(&self, instant: DateTime<Utc>) -> Self {
+        let mut past = Self::default();
+
+        for (statement, entry) in &self.facts {
+            if let Some(entry) = entry.as_of(instant) {
+                past.facts.insert(statement.clone(), entry);
+            }
+        }
+
+        for (rule, record) in &self.hypotheses {
+            if let Some(record) = record.as_of(instant) {
+                past.hypotheses.insert(rule.clone(), record);
+            }
+        }
+
+        for (scope, history) in &self.scopes {
+            if let Some(history) = history.as_of(instant) {
+                past.scopes.insert(scope.clone(), history);
+            }
+        }
+
+        past
+    }
+
+    pub(crate) fn entry(&self, statement: &Statement) -> Option<&KnowledgeEntry> {
+        self.facts.get(statement)
+    }
+
+    /// Puts an entry back as it was (or removes it), to revert a correction.
+    pub(crate) fn restore_entry(&mut self, statement: &Statement, entry: Option<KnowledgeEntry>) {
+        match entry {
+            Some(entry) => {
+                self.facts.insert(statement.clone(), entry);
+            }
+            None => {
+                self.facts.remove(statement);
+            }
+        }
+    }
+
+    /// Stops holding a belief, keeping its evidence and the reason.
+    pub(crate) fn withdraw(&mut self, statement: &Statement, reason: String) -> bool {
+        match self.facts.get_mut(statement) {
+            Some(entry) if entry.standing().is_active() => {
+                entry.set_standing(Standing::Obsolete {
+                    since: Utc::now(),
+                    reason,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn hypothesis(&self, rule: &Rule) -> Option<&HypothesisRecord> {
+        self.hypotheses.get(rule)
+    }
+
+    pub(crate) fn hypothesis_mut(&mut self, rule: &Rule) -> Option<&mut HypothesisRecord> {
+        self.hypotheses.get_mut(rule)
+    }
+
+    pub(crate) fn restore_hypothesis(&mut self, rule: &Rule, record: Option<HypothesisRecord>) {
+        match record {
+            Some(record) => {
+                self.hypotheses.insert(rule.clone(), record);
+            }
+            None => {
+                self.hypotheses.remove(rule);
+            }
+        }
+    }
+
+    /// Registers a conjecture discovered in a dream, unless already known.
+    pub(crate) fn propose_dreamt_hypothesis(&mut self, rule: Rule, dream: Uuid) -> bool {
+        if self.hypotheses.contains_key(&rule) {
+            return false;
+        }
+
+        self.hypotheses.insert(
+            rule.clone(),
+            HypothesisRecord::new(rule, dream, 0).with_origin(KnowledgeOrigin::Dream),
+        );
+        true
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = &KnowledgeEntry> {
         self.facts.values()
     }
@@ -180,6 +268,7 @@ impl KnowledgeMemory {
             && contrary.standing().is_active()
         {
             contrary.set_standing(Standing::Obsolete {
+                since: Utc::now(),
                 reason: format!("contradicted by the later observation of {statement}"),
             });
         }
@@ -239,6 +328,7 @@ impl KnowledgeMemory {
 
             if from_scope && !entry.evidence().is_empty() {
                 entry.set_standing(Standing::Obsolete {
+                    since: Utc::now(),
                     reason: format!("{source} no longer observes it in {scope}@{revision}"),
                 });
                 obsolete.push(entry.statement().clone());
@@ -260,6 +350,7 @@ impl KnowledgeMemory {
 
                 if depends {
                     entry.set_standing(Standing::Obsolete {
+                        since: Utc::now(),
                         reason: format!("premise {statement} is obsolete"),
                     });
                     obsolete.push(entry.statement().clone());

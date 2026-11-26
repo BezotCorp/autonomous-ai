@@ -90,13 +90,14 @@ impl<'a> ModuleSelector<'a> {
             .map(String::as_str)
             .chain([RoutingMemory::GLOBAL_FEATURE])
             .map(|feature| {
-                let statistic = self.routing.statistic(candidate.name(), feature);
-
-                BetaDistribution::posterior(
-                    self.parameters.prior_successes(),
-                    self.parameters.prior_failures(),
-                    statistic.successes(),
-                    statistic.failures(),
+                self.routing.estimate(
+                    candidate.name(),
+                    feature,
+                    (
+                        self.parameters.prior_successes(),
+                        self.parameters.prior_failures(),
+                    ),
+                    self.parameters.simulation_weight(),
                 )
             })
             .collect();

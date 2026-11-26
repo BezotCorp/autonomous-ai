@@ -1,6 +1,8 @@
 use crate::{
-    acquisition::external_access::ExternalAccess, cognition::capability_model::CapabilityModel,
-    engine::learning_parameters::LearningParameters, memory::knowledge_memory::KnowledgeMemory,
+    acquisition::external_access::ExternalAccess,
+    cognition::capability_model::CapabilityModel,
+    engine::learning_parameters::LearningParameters,
+    memory::{knowledge_memory::KnowledgeMemory, persistent_memory::PersistentMemory},
     resources::initial_resources::InitialResources,
 };
 
@@ -14,6 +16,7 @@ pub(crate) struct ModuleEnvironment<'a> {
     access: &'a ExternalAccess<'a>,
     capabilities: &'a CapabilityModel<'a>,
     parameters: &'a LearningParameters,
+    memory: &'a PersistentMemory,
 }
 
 impl<'a> ModuleEnvironment<'a> {
@@ -23,6 +26,7 @@ impl<'a> ModuleEnvironment<'a> {
         access: &'a ExternalAccess<'a>,
         capabilities: &'a CapabilityModel<'a>,
         parameters: &'a LearningParameters,
+        memory: &'a PersistentMemory,
     ) -> Self {
         Self {
             knowledge,
@@ -30,6 +34,7 @@ impl<'a> ModuleEnvironment<'a> {
             access,
             capabilities,
             parameters,
+            memory,
         }
     }
 
@@ -47,6 +52,12 @@ impl<'a> ModuleEnvironment<'a> {
 
     pub(crate) fn capabilities(&self) -> &'a CapabilityModel<'a> {
         self.capabilities
+    }
+
+    /// The whole memory of the intelligence, for examining its own
+    /// functioning (experiences, learning, dreams, corrections).
+    pub(crate) fn memory(&self) -> &'a PersistentMemory {
+        self.memory
     }
 
     pub(crate) fn parameters(&self) -> &'a LearningParameters {

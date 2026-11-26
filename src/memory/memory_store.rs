@@ -18,7 +18,7 @@ impl MemoryStore {
     /// Identifies memory files and the version of their layout, so that a
     /// file written by an incompatible version is reported as such.
     const MAGIC: &'static [u8; 4] = b"AAIM";
-    const FORMAT_VERSION: u32 = 3;
+    const FORMAT_VERSION: u32 = 4;
 
     pub(crate) fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
         fs::create_dir_all(Self::parent(path))?;

@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     cognition::module_descriptor::ModuleDescriptor,
-    engine::learning_parameters::LearningParameters,
-    mathematics::beta_distribution::BetaDistribution, memory::routing_memory::RoutingMemory,
+    engine::learning_parameters::LearningParameters, memory::routing_memory::RoutingMemory,
     planning::strategy_statistic::StrategyStatistic,
 };
 
@@ -52,15 +51,17 @@ impl<'a> CapabilityModel<'a> {
             .map(String::as_str)
             .chain([RoutingMemory::GLOBAL_FEATURE])
             .map(|feature| {
-                let statistic = self.routing.statistic(module, feature);
-
-                BetaDistribution::posterior(
-                    self.parameters.prior_successes(),
-                    self.parameters.prior_failures(),
-                    statistic.successes(),
-                    statistic.failures(),
-                )
-                .mean()
+                self.routing
+                    .estimate(
+                        module,
+                        feature,
+                        (
+                            self.parameters.prior_successes(),
+                            self.parameters.prior_failures(),
+                        ),
+                        self.parameters.simulation_weight(),
+                    )
+                    .mean()
             })
             .collect();
 
@@ -73,6 +74,16 @@ impl<'a> CapabilityModel<'a> {
 
     pub(crate) fn consumption(&self, module: &str) -> BTreeMap<String, f64> {
         self.routing.expected_consumption(module)
+    }
+
+    /// Whether some capability could obtain information of this signature:
+    /// a module declaring it, or the memory holding some.
+    pub(crate) fn can_obtain(&self, signature: &str) -> bool {
+        self.remembered.contains_key(signature)
+            || self
+                .descriptors
+                .iter()
+                .any(|descriptor| !descriptor.plans() && descriptor.declares(signature))
     }
 
     pub(crate) fn prerequisites(&self, module: &str) -> Vec<String> {

@@ -16,6 +16,22 @@ pub(crate) struct Event {
 }
 
 impl Event {
+    /// Event the intelligence gives itself (e.g. when it decides to
+    /// examine its own functioning).
+    pub(crate) fn internal(id: String, questions: Vec<Statement>) -> Self {
+        Self {
+            id,
+            source: "self".to_owned(),
+            occurred_at: Utc::now(),
+            payload: EventPayload::Assertions {
+                statements: Vec::new(),
+                rules: Vec::new(),
+                documents: Vec::new(),
+            },
+            questions,
+        }
+    }
+
     pub(crate) fn id(&self) -> &str {
         &self.id
     }

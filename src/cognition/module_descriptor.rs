@@ -15,6 +15,7 @@ pub(crate) struct ModuleDescriptor {
     produces: Vec<EpistemicKind>,
     external: bool,
     planning: bool,
+    reflective: bool,
 }
 
 impl ModuleDescriptor {
@@ -27,6 +28,7 @@ impl ModuleDescriptor {
             produces: Vec::new(),
             external: false,
             planning: false,
+            reflective: false,
         }
     }
 
@@ -59,6 +61,17 @@ impl ModuleDescriptor {
         self
     }
 
+    /// Declares that the module examines the cognition itself and may
+    /// propose corrections of the memory and internal experiments.
+    pub(crate) fn reflective(mut self) -> Self {
+        self.reflective = true;
+        self
+    }
+
+    pub(crate) fn reflects(&self) -> bool {
+        self.reflective
+    }
+
     pub(crate) fn plans(&self) -> bool {
         self.planning
     }
@@ -69,6 +82,11 @@ impl ModuleDescriptor {
 
     pub(crate) fn consumes(&self, kind: ContentKind) -> bool {
         self.consumes.contains(&kind)
+    }
+
+    /// Signatures explicitly declared as supplied.
+    pub(crate) fn supplied(&self) -> &[String] {
+        &self.supplies
     }
 
     pub(crate) fn supplies(&self, signature: &str) -> bool {

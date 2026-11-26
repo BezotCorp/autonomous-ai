@@ -40,6 +40,15 @@ impl<'a> ResponseStore<'a> {
         found
     }
 
+    /// Data as recorded at an instant, for replays.
+    pub(crate) fn recorded(
+        &self,
+        key: &str,
+        instant: chrono::DateTime<chrono::Utc>,
+    ) -> Option<CachedResponse> {
+        self.persistent.at(key, instant).cloned()
+    }
+
     pub(crate) fn put(&self, key: &str, response: CachedResponse) {
         self.added
             .lock()

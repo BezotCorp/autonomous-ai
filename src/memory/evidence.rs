@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -9,6 +10,7 @@ pub(crate) struct Evidence {
     episode: Uuid,
     provenance: Option<Provenance>,
     premises: Vec<Statement>,
+    recorded_at: DateTime<Utc>,
 }
 
 impl Evidence {
@@ -21,7 +23,12 @@ impl Evidence {
             episode,
             provenance,
             premises,
+            recorded_at: Utc::now(),
         }
+    }
+
+    pub(crate) fn recorded_at(&self) -> DateTime<Utc> {
+        self.recorded_at
     }
 
     pub(crate) fn provenance(&self) -> Option<&Provenance> {

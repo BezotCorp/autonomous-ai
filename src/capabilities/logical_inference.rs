@@ -17,9 +17,11 @@ use crate::{
 /// Every valid rule is matched against valid statements, premises being
 /// joined in order of selectivity. A complete match yields a deduction
 /// justified by the rule and the matched statements. When a premise has no
-/// match, the missing statement becomes a need — but only if it is focused
-/// (some argument is known) or if it serves an open question or need
-/// (backward chaining), so that unfocused curiosity does not explode.
+/// match, the missing statement becomes a need — but only if it serves an
+/// open question or need (backward chaining), or if it is focused (some
+/// argument is known) and something could obtain it (a rule concluding
+/// it, a capability supplying it, the memory holding it): curiosity about
+/// what nothing can provide only produces impasses.
 pub(crate) struct LogicalInference {
     descriptor: ModuleDescriptor,
 }
@@ -36,6 +38,7 @@ struct Exploration<'a> {
     deductions: BTreeSet<(Statement, Vec<NodeId>)>,
     needs: BTreeSet<(Statement, Vec<NodeId>)>,
     exhausted: bool,
+    obtainable: &'a dyn Fn(&str) -> bool,
 }
 
 impl LogicalInference {
@@ -77,6 +80,13 @@ impl CognitiveModule for LogicalInference {
 
         let mut deductions = BTreeSet::new();
         let mut needs = BTreeSet::new();
+        let concluded: BTreeSet<String> = rules
+            .iter()
+            .map(|(_, rule)| rule.conclusion().signature())
+            .collect();
+        let capabilities = context.capabilities();
+        let obtainable =
+            |signature: &str| concluded.contains(signature) || capabilities.can_obtain(signature);
 
         for (rule_node, rule) in &rules {
             let mut starts = vec![(Bindings::default(), None)];
@@ -97,6 +107,7 @@ impl CognitiveModule for LogicalInference {
                     deductions: BTreeSet::new(),
                     needs: BTreeSet::new(),
                     exhausted: false,
+                    obtainable: &obtainable,
                 };
 
                 let remaining: Vec<usize> = (0..rule.premises().len()).collect();
@@ -202,7 +213,9 @@ impl Exploration<'_> {
             let (position, missing, _) = candidates.swap_remove(missing);
             let premise = &premises[remaining[position]];
 
-            if self.goal.is_some() || Self::is_focused(premise, &missing) {
+            if self.goal.is_some()
+                || (Self::is_focused(premise, &missing) && (self.obtainable)(&missing.signature()))
+            {
                 let mut justification = vec![self.rule_node];
                 justification.extend_from_slice(matched);
                 justification.extend(self.goal);
@@ -299,18 +312,32 @@ mod tests {
         }
 
         let module = LogicalInference::new();
-        let output = TestEnvironment::default()
-            .with(|environment| module.apply(&ModuleContext::new(&graph, environment, 0, None)))
-            .unwrap();
+        let contents = |environment: TestEnvironment| -> Vec<String> {
+            let output = environment
+                .with(|environment| module.apply(&ModuleContext::new(&graph, environment, 0, None)))
+                .unwrap();
+            let (proposals, _, _) = output.into_parts();
 
-        let (proposals, _, _) = output.into_parts();
-        let contents: Vec<String> = proposals
-            .into_iter()
-            .map(|proposal| proposal.into_parts().0.to_string())
-            .collect();
+            proposals
+                .into_iter()
+                .map(|proposal| proposal.into_parts().0.to_string())
+                .collect()
+        };
 
-        assert!(contents.contains(&"mortal(socrates)".to_owned()));
-        assert!(contents.contains(&"need feathered(tweety)".to_owned()));
-        assert_eq!(contents.len(), 2);
+        // Nothing could tell whether tweety is feathered: no need.
+        assert_eq!(
+            contents(TestEnvironment::default()),
+            vec!["mortal(socrates)".to_owned()]
+        );
+
+        // Once a capability can, the focused need is worth formulating.
+        let observer =
+            crate::cognition::module_descriptor::ModuleDescriptor::new("observer", "test")
+                .supplying(&["feathered/1"]);
+        let with_observer = contents(TestEnvironment::knowing(vec![observer]));
+
+        assert!(with_observer.contains(&"mortal(socrates)".to_owned()));
+        assert!(with_observer.contains(&"need feathered(tweety)".to_owned()));
+        assert_eq!(with_observer.len(), 2);
     }
 }

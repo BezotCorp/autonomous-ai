@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum EpistemicKind {
     /// Directly perceived from an event or acquired from an external source.
     Observation,
+    /// Reproduced, during a dream, from data recorded in a past acquisition.
+    /// It stands for an observation inside the dream only: it is never a
+    /// new, independent observation of the world.
+    Replay,
     /// Provided by the initial resources.
     Premise,
     /// Recalled from the persistent knowledge memory.
@@ -21,6 +25,11 @@ pub(crate) enum EpistemicKind {
 }
 
 impl EpistemicKind {
+    /// Contents standing for what the environment showed.
+    pub(crate) fn is_observed(self) -> bool {
+        matches!(self, Self::Observation | Self::Replay)
+    }
+
     /// Results that may be withdrawn when a contradiction is traced back to them.
     pub(crate) fn is_defeasible(self) -> bool {
         matches!(self, Self::Hypothesis | Self::Recollection)

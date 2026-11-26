@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::{
     acquisition::{
-        external_access::ExternalAccess, http_response::HttpResponse, repository::Repository,
-        response_store::ResponseStore,
+        access_mode::AccessMode, external_access::ExternalAccess, http_response::HttpResponse,
+        repository::Repository, response_store::ResponseStore,
     },
     consumables::{resource_meter::ResourceMeter, resource_state::ResourceState},
     memory::cached_response::CachedResponse,
@@ -22,9 +22,14 @@ use crate::{
 /// - independent lookups are grouped into one GraphQL query when cheaper;
 /// - every request is authorised and accounted by the resource meter, and
 ///   the quota the API reports is observed after each response.
+///
+/// In replay mode, nothing leaves the process: recorded data is served as
+/// it was at the replayed instant, missing data stays missing, and the
+/// consumption the acquisition would have had then is simulated.
 pub(crate) struct Github<'a> {
     meter: &'a ResourceMeter,
     store: &'a ResponseStore<'a>,
+    mode: AccessMode,
 }
 
 /// How long a stored response stays usable.
@@ -48,6 +53,7 @@ impl<'a> Github<'a> {
         Self {
             meter: access.meter(),
             store: access.store(),
+            mode: access.mode(),
         }
     }
 
@@ -87,6 +93,41 @@ impl<'a> Github<'a> {
     ) -> BTreeMap<Repository, Result<String, String>> {
         let mut revisions = BTreeMap::new();
 
+        if let AccessMode::Replay { as_of, .. } = self.mode {
+            for batch in repositories.chunks(Self::GRAPHQL_BATCH) {
+                // Revisions are always looked up afresh: one query per batch.
+                if let Err(error) = self.meter.authorize(Self::GRAPHQL_RESOURCE, 1.0) {
+                    for repository in batch {
+                        revisions.insert(repository.clone(), Err(error.clone()));
+                    }
+                    continue;
+                }
+
+                self.meter.record(
+                    Self::GRAPHQL_RESOURCE,
+                    &format!("replayed heads {as_of}"),
+                    1.0,
+                );
+
+                for repository in batch {
+                    let revision = self
+                        .store
+                        .recorded(&Self::head_key(repository), as_of)
+                        .map(|recorded| recorded.body().to_owned())
+                        .ok_or_else(|| {
+                            format!(
+                                "revision of {} not recorded by {as_of}, left missing",
+                                repository.full_name()
+                            )
+                        });
+
+                    revisions.insert(repository.clone(), revision);
+                }
+            }
+
+            return revisions;
+        }
+
         for batch in repositories.chunks(Self::GRAPHQL_BATCH) {
             let fields: Vec<String> = batch
                 .iter()
@@ -111,6 +152,13 @@ impl<'a> Github<'a> {
                             .ok_or_else(|| {
                                 format!("no default branch revision for {}", repository.full_name())
                             });
+
+                        if let Ok(revision) = &revision {
+                            self.store.put(
+                                &Self::head_key(repository),
+                                CachedResponse::mutable(revision.clone(), None),
+                            );
+                        }
 
                         revisions.insert(repository.clone(), revision);
                     }
@@ -263,6 +311,50 @@ impl<'a> Github<'a> {
         let mut contents = BTreeMap::new();
         let mut missing = Vec::new();
 
+        if let AccessMode::Replay { as_of, since } = self.mode {
+            let mut acquired: usize = 0;
+
+            for sha in shas {
+                let content = match self.store.recorded(&Self::blob_key(sha), as_of) {
+                    Some(recorded) => {
+                        if recorded.stored_at() < since {
+                            self.meter.avoid();
+                        } else {
+                            acquired += 1;
+                        }
+
+                        Ok(recorded.body().to_owned())
+                    }
+                    None => Err(format!("blob {sha} not recorded, left missing")),
+                };
+
+                contents.insert(sha.clone(), content);
+            }
+
+            if acquired > 0 {
+                let batches = acquired.div_ceil(Self::GRAPHQL_BATCH) as f64;
+
+                if self
+                    .meter
+                    .authorize(Self::GRAPHQL_RESOURCE, batches)
+                    .is_err()
+                {
+                    return shas
+                        .iter()
+                        .map(|sha| (sha.clone(), Err("resource exhausted in replay".to_owned())))
+                        .collect();
+                }
+
+                self.meter.record(
+                    Self::GRAPHQL_RESOURCE,
+                    &format!("replayed blobs {as_of}"),
+                    batches,
+                );
+            }
+
+            return contents;
+        }
+
         for sha in shas {
             if contents.contains_key(sha) || missing.contains(sha) {
                 continue;
@@ -339,7 +431,7 @@ impl<'a> Github<'a> {
                         Some(text) if complete => {
                             self.store.put(
                                 &Self::blob_key(sha),
-                                CachedResponse::new(text.to_owned(), None),
+                                CachedResponse::immutable(text.to_owned()),
                             );
                             contents.insert(sha.clone(), Ok(text.to_owned()));
                         }
@@ -361,7 +453,7 @@ impl<'a> Github<'a> {
             if let Ok(text) = &content {
                 self.store.put(
                     &Self::blob_key(&sha),
-                    CachedResponse::new(text.clone(), None),
+                    CachedResponse::immutable(text.clone()),
                 );
             }
 
@@ -428,6 +520,16 @@ impl<'a> Github<'a> {
         freshness: Freshness,
     ) -> Result<(String, Option<String>), String> {
         let key = format!("github:{endpoint}|{}", accept.unwrap_or_default());
+
+        if let AccessMode::Replay { as_of, since } = self.mode {
+            let recorded = self.replayed(&key, Self::REST_RESOURCE, as_of, since)?;
+
+            return Ok((
+                recorded.body().to_owned(),
+                recorded.next().map(str::to_owned),
+            ));
+        }
+
         let cached = self.store.get(&key);
 
         if freshness == Freshness::Immutable
@@ -476,12 +578,14 @@ impl<'a> Github<'a> {
                     Freshness::Revalidated => response.header("etag").map(str::to_owned),
                 };
 
-                if freshness == Freshness::Immutable || validator.is_some() {
-                    self.store.put(
-                        &key,
-                        CachedResponse::new(response.body().to_owned(), validator),
-                    );
-                }
+                let stored = match freshness {
+                    Freshness::Immutable => CachedResponse::immutable(response.body().to_owned()),
+                    Freshness::Revalidated => {
+                        CachedResponse::mutable(response.body().to_owned(), validator)
+                    }
+                };
+
+                self.store.put(&key, stored.with_next(next.clone()));
 
                 Ok((response.into_body(), next))
             }
@@ -492,10 +596,48 @@ impl<'a> Github<'a> {
         }
     }
 
+    /// Recorded answer to a request, charging the meter with what the
+    /// request would have consumed at the replayed instant.
+    fn replayed(
+        &self,
+        key: &str,
+        resource: &str,
+        as_of: DateTime<Utc>,
+        since: DateTime<Utc>,
+    ) -> Result<CachedResponse, String> {
+        let recorded = self
+            .store
+            .recorded(key, as_of)
+            .ok_or_else(|| format!("not recorded by {as_of}, left missing: {key}"))?;
+
+        match (recorded.stored_at() < since, recorded.is_immutable()) {
+            (true, true) => self.meter.avoid(),
+            (true, false) => {
+                self.meter.authorize(resource, 1.0)?;
+                self.meter.record(resource, key, 0.0);
+                self.meter.avoid();
+            }
+            (false, _) => {
+                self.meter.authorize(resource, 1.0)?;
+                self.meter.record(resource, key, 1.0);
+            }
+        }
+
+        Ok(recorded)
+    }
+
+    fn head_key(repository: &Repository) -> String {
+        format!("github:head:{}", repository.full_name())
+    }
+
     /// Runs a GraphQL query (the fields of the root `query`) and returns
     /// its data, which may be partial: absent entries are reported by the
     /// callers for what they concern.
     fn graphql(&self, fields: &str) -> Result<Value, String> {
+        if self.mode != AccessMode::Live {
+            return Err("no external request in replay".to_owned());
+        }
+
         self.meter.authorize(Self::GRAPHQL_RESOURCE, 1.0)?;
 
         let query = format!("query {{ rateLimit {{ cost }} {fields} }}");
@@ -555,6 +697,8 @@ impl<'a> Github<'a> {
         }
     }
 
+    /// Only reached in live mode: every request leaving the process goes
+    /// through here.
     fn execute(arguments: &[&str]) -> Result<HttpResponse, String> {
         let output = Command::new("gh")
             .args(arguments)
@@ -615,5 +759,55 @@ impl<'a> Github<'a> {
             Self::encode_segment(repository.owner()),
             Self::encode_segment(repository.name()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use chrono::{Duration, Utc};
+
+    use super::Github;
+    use crate::{
+        acquisition::external_access::ExternalAccess,
+        consumables::resource_meter::ResourceMeter,
+        memory::{acquisition_cache::AcquisitionCache, cached_response::CachedResponse},
+    };
+
+    #[test]
+    fn replays_only_what_was_recorded_without_any_request() {
+        let mut cache = AcquisitionCache::default();
+
+        cache.integrate(
+            BTreeMap::from([(
+                "github:orgs/known/repos?per_page=100&type=all|".to_owned(),
+                CachedResponse::mutable(r#"[{"name": "one", "archived": false}]"#.to_owned(), None),
+            )]),
+            BTreeSet::new(),
+        );
+
+        let now = Utc::now();
+        let access = ExternalAccess::replay(
+            ResourceMeter::default(),
+            &cache,
+            now,
+            now - Duration::hours(1),
+        );
+        let github = Github::new(&access);
+
+        assert_eq!(github.repositories("known").unwrap().len(), 1);
+        assert!(
+            github
+                .repositories("unknown")
+                .unwrap_err()
+                .contains("left missing")
+        );
+
+        // Recorded during the replayed period: it would have cost a request.
+        assert_eq!(
+            access.meter().usage().requests().get(Github::REST_RESOURCE),
+            Some(&1)
+        );
     }
 }

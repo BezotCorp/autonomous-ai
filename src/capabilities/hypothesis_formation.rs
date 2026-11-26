@@ -47,7 +47,10 @@ impl HypothesisFormation {
         graph.node(id).is_some_and(|node| {
             matches!(
                 node.kind(),
-                EpistemicKind::Observation | EpistemicKind::Recollection | EpistemicKind::Premise
+                EpistemicKind::Observation
+                    | EpistemicKind::Replay
+                    | EpistemicKind::Recollection
+                    | EpistemicKind::Premise
             )
         })
     }

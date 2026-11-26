@@ -6,8 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     consumables::{resource_state::ResourceState, resource_usage::ResourceUsage},
+    events::event::Event,
     memory::{
-        answer_record::AnswerRecord, episode_configuration::EpisodeConfiguration,
+        activity::Activity, answer_record::AnswerRecord,
+        episode_configuration::EpisodeConfiguration, experiment_request::ExperimentRequest,
         impasse_record::ImpasseRecord, invocation_record::InvocationRecord,
         knowledge_exploitation::KnowledgeExploitation, revision_record::RevisionRecord,
         termination::Termination,
@@ -38,6 +40,9 @@ pub(crate) struct EpisodeRecord {
     usage: ResourceUsage,
     resources: BTreeMap<String, ResourceState>,
     exploitation: KnowledgeExploitation,
+    event: Option<Event>,
+    corrections: Vec<String>,
+    experiments: Vec<ExperimentRequest>,
 }
 
 impl EpisodeRecord {
@@ -77,6 +82,9 @@ impl EpisodeRecord {
             usage: ResourceUsage::default(),
             resources: BTreeMap::new(),
             exploitation: KnowledgeExploitation::default(),
+            event: None,
+            corrections: Vec::new(),
+            experiments: Vec::new(),
         }
     }
 
@@ -94,6 +102,43 @@ impl EpisodeRecord {
         self.resources = resources;
         self.exploitation = exploitation;
         self
+    }
+
+    /// Corrections the episode applied and experiments it requested.
+    pub(crate) fn with_reflection(
+        mut self,
+        corrections: Vec<String>,
+        experiments: Vec<ExperimentRequest>,
+    ) -> Self {
+        self.corrections = corrections;
+        self.experiments = experiments;
+        self
+    }
+
+    pub(crate) fn corrections(&self) -> &[String] {
+        &self.corrections
+    }
+
+    pub(crate) fn experiments(&self) -> &[ExperimentRequest] {
+        &self.experiments
+    }
+
+    /// Keeps the event, so that the experience can be replayed.
+    pub(crate) fn with_event(mut self, event: Event) -> Self {
+        self.event = Some(event);
+        self
+    }
+
+    pub(crate) fn event(&self) -> Option<&Event> {
+        self.event.as_ref()
+    }
+
+    pub(crate) fn id(&self) -> Uuid {
+        self.id
+    }
+
+    pub(crate) fn activity(&self) -> Activity {
+        self.configuration.activity()
     }
 
     pub(crate) fn event_id(&self) -> &str {

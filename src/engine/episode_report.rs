@@ -30,6 +30,10 @@ impl EpisodeReport {
         }
     }
 
+    pub(crate) fn knowledge_changes(&self) -> &ConsolidationSummary {
+        &self.knowledge_changes
+    }
+
     pub(crate) fn episode(&self) -> &EpisodeRecord {
         &self.episode
     }

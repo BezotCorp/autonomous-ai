@@ -10,7 +10,10 @@ use serde::Serialize;
 
 use crate::{
     capabilities::module_catalog::ModuleCatalog,
-    engine::{intelligence::Intelligence, learning_parameters::LearningParameters},
+    engine::{
+        autonomy::Autonomy, intelligence::Intelligence, learning_parameters::LearningParameters,
+        memory_correction::MemoryCorrection,
+    },
     events::event::Event,
     interface::{arguments::Arguments, output::Output},
     memory::{
@@ -44,6 +47,7 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             scarcity_weight,
             minimum_utility,
             budgets,
+            acquisition_cache,
             output,
         } => {
             let mut input = String::new();
@@ -83,8 +87,17 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             let report = intelligence.reason(
                 &event,
                 &mut persistent,
-                EpisodeConfiguration::new(seed, acquired_knowledge, learned_routing)
-                    .with_resource_budgets(budgets),
+                {
+                    let configuration =
+                        EpisodeConfiguration::new(seed, acquired_knowledge, learned_routing)
+                            .with_resource_budgets(budgets);
+
+                    if acquisition_cache {
+                        configuration
+                    } else {
+                        configuration.without_acquisition_cache()
+                    }
+                },
                 output == Output::Detailed,
             );
 
@@ -106,6 +119,87 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        Arguments::Idle {
+            memory,
+            resources,
+            seed,
+            offline,
+            maximum_activities,
+            reflection,
+            dreams,
+            cost_weight,
+            minimum_worth,
+        } => {
+            let resources = InitialResources::load(&resources)?;
+            let mut parameters = LearningParameters::default();
+
+            if let Some(weight) = cost_weight {
+                parameters = parameters.with_cost_weight_per_second(weight);
+            }
+
+            let seed = match seed {
+                Some(seed) => seed,
+                None => u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())
+                    .unwrap_or(u64::MAX),
+            };
+
+            let store = MemoryStore::open(&memory)?;
+            let mut persistent = store.load()?;
+            let intelligence = Intelligence::new(
+                ModuleCatalog::standard(offline),
+                resources,
+                parameters.clone(),
+            );
+            let records = Autonomy::new(
+                &intelligence,
+                &parameters,
+                reflection,
+                dreams,
+                minimum_worth,
+            )
+            .run(&mut persistent, maximum_activities, seed);
+
+            store.save(&persistent)?;
+
+            let mut stdout = io::stdout().lock();
+
+            if records.is_empty() {
+                writeln!(stdout, "nothing seemed worth doing")?;
+            }
+
+            for record in records {
+                writeln!(
+                    stdout,
+                    "{}  {}  {:.2}s  {}  {}",
+                    record.activity().label(),
+                    record.focus(),
+                    record.seconds(),
+                    if record.worthwhile() {
+                        "worthwhile"
+                    } else {
+                        "fruitless"
+                    },
+                    record.summary()
+                )?;
+            }
+        }
+
+        Arguments::Revert {
+            memory,
+            correction,
+            reason,
+        } => {
+            let store = open_existing(&memory)?;
+            let mut persistent = store.load()?;
+            let id = correction
+                .parse()
+                .map_err(|_| format!("Invalid correction identifier {correction}"))?;
+
+            MemoryCorrection::revert(&mut persistent, id, reason)?;
+            store.save(&persistent)?;
+            writeln!(io::stdout().lock(), "correction {id} reverted")?;
+        }
+
         Arguments::Inspect { memory, section } => {
             let persistent = open_existing(&memory)?.load()?;
 
@@ -121,6 +215,9 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
                 }
                 "scopes" => write_output(&persistent.knowledge().scopes().collect::<Vec<_>>())?,
                 "resources" => write_output(persistent.resources())?,
+                "dreams" => write_output(persistent.dreams())?,
+                "corrections" => write_output(persistent.corrections())?,
+                "activities" => write_output(persistent.activities())?,
                 "knowledge" => write_output(&persistent.knowledge().entries().collect::<Vec<_>>())?,
                 "hypotheses" => {
                     write_output(&persistent.knowledge().hypotheses().collect::<Vec<_>>())?

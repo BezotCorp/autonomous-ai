@@ -13,7 +13,7 @@ pub(crate) struct EpisodeSummary<'a> {
 }
 
 impl<'a> EpisodeSummary<'a> {
-    pub(crate) const HEADER: &'static str = "#  started  event  answers(proven/refuted/undetermined)  currency  invocations  seconds  requests(units)  avoided  redundant  refused  plans(adopted/revised/achieved)  memory(recalled/in-answers/confirmed/superseded)  termination  configuration";
+    pub(crate) const HEADER: &'static str = "#  started  event  answers(proven/refuted/undetermined)  currency  invocations  seconds  requests(units)  avoided  redundant  refused  plans(adopted/revised/achieved)  memory(recalled/in-answers/confirmed/superseded)  corrections  experiments  termination  configuration";
 
     pub(crate) fn new(index: usize, episode: &'a EpisodeRecord) -> Self {
         Self { index, episode }
@@ -68,7 +68,7 @@ impl fmt::Display for EpisodeSummary<'_> {
 
         write!(
             formatter,
-            "{}  {}  {}  {}/{}/{}  {}  {}  {:.2}  {}  {}  {}  {}  {}/{}/{}  {}/{}/{}/{}  {:?}  {}",
+            "{}  {}  {}  {}/{}/{}  {}  {}  {:.2}  {}  {}  {}  {}  {}/{}/{}  {}/{}/{}/{}  {}  {}  {:?}  {}",
             self.index,
             episode.started_at().format("%Y-%m-%dT%H:%M:%S"),
             episode.event_id(),
@@ -93,6 +93,8 @@ impl fmt::Display for EpisodeSummary<'_> {
             exploitation.recalled_in_answers(),
             exploitation.confirmed_count(),
             exploitation.superseded_count(),
+            episode.corrections().len(),
+            episode.experiments().len(),
             episode.termination(),
             episode.configuration().label(),
         )

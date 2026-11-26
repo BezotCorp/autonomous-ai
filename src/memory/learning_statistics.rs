@@ -6,8 +6,9 @@ use crate::{
     consumables::{resource_state::ResourceState, resource_usage::ResourceUsage},
     memory::{
         answer_status::AnswerStatus, configuration_statistics::ConfigurationStatistics,
-        hypothesis_status::HypothesisStatus, module_statistics::ModuleStatistics,
-        persistent_memory::PersistentMemory, standing::Standing,
+        dream_statistics::DreamStatistics, hypothesis_status::HypothesisStatus,
+        module_statistics::ModuleStatistics, persistent_memory::PersistentMemory,
+        standing::Standing,
     },
     planning::strategy_statistic::StrategyStatistic,
 };
@@ -42,6 +43,11 @@ pub(crate) struct LearningStatistics {
     scope_changes: u64,
     acquisition_cache_entries: usize,
     acquisition_cache_bytes: usize,
+    dreams: BTreeMap<String, DreamStatistics>,
+    pending_experiments: usize,
+    corrections_applied: BTreeMap<String, usize>,
+    corrections_reverted: usize,
+    activities: BTreeMap<String, (usize, usize, f64)>,
 }
 
 impl LearningStatistics {
@@ -138,6 +144,44 @@ impl LearningStatistics {
         statistics.strategies = memory.routing().strategies().clone();
         statistics.acquisition_cache_entries = memory.acquisitions().len();
         statistics.acquisition_cache_bytes = memory.acquisitions().bytes();
+
+        for dream in memory.dreams().dreams() {
+            statistics
+                .dreams
+                .entry(format!("{:?}", dream.mode()))
+                .or_default()
+                .observe(dream);
+        }
+
+        statistics.pending_experiments = memory.dreams().pending().len();
+
+        for record in memory.corrections().records() {
+            let kind = format!("{:?}", record.correction())
+                .split([' ', '{'])
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+
+            *statistics.corrections_applied.entry(kind).or_default() += 1;
+
+            if !record.is_active() {
+                statistics.corrections_reverted += 1;
+            }
+        }
+
+        for record in memory.activities().records() {
+            let entry = statistics
+                .activities
+                .entry(record.focus().to_owned())
+                .or_default();
+
+            entry.0 += 1;
+            entry.2 += record.seconds();
+
+            if record.worthwhile() {
+                entry.1 += 1;
+            }
+        }
 
         let hypotheses = statistics.hypotheses_open + statistics.hypotheses_marked_refuted;
 

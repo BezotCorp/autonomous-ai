@@ -60,7 +60,10 @@ impl AnswerRecord {
         self.staleness == 0.0
     }
 
-    #[cfg(test)]
+    pub(crate) fn question(&self) -> &Statement {
+        &self.question
+    }
+
     pub(crate) fn answers(&self) -> &[Statement] {
         &self.answers
     }

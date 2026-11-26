@@ -315,19 +315,29 @@ impl StrategicPlanning {
         let key = entries.join(", ");
         let mut reused = false;
 
-        // A strategy already tried is judged on its observed effectiveness.
-        if let Some(statistic) = capabilities.strategy(goal_key, &key)
-            && let Some(observed_cost) = statistic.mean_cost()
-        {
-            success = BetaDistribution::posterior(
-                parameters.prior_successes(),
-                parameters.prior_failures(),
-                statistic.achieved(),
-                statistic.executions() - statistic.achieved(),
-            )
-            .mean();
-            cost = observed_cost;
-            reused = true;
+        // A strategy already tried is judged on its observed effectiveness;
+        // one only tried in dreams, on its simulated effectiveness, which
+        // counts less than real executions.
+        if let Some(statistic) = capabilities.strategy(goal_key, &key) {
+            let weight = parameters.simulation_weight();
+            let simulated_failures =
+                statistic.simulated_executions() - statistic.simulated_achieved();
+
+            if let Some(observed_cost) = statistic.mean_cost().or_else(|| {
+                (weight > 0.0)
+                    .then_some(statistic.mean_simulated_cost())
+                    .flatten()
+            }) {
+                success = BetaDistribution::posterior(
+                    parameters.prior_successes() + weight * statistic.simulated_achieved() as f64,
+                    parameters.prior_failures() + weight * simulated_failures as f64,
+                    statistic.achieved(),
+                    statistic.executions() - statistic.achieved(),
+                )
+                .mean();
+                cost = observed_cost;
+                reused = true;
+            }
         }
 
         Strategy {

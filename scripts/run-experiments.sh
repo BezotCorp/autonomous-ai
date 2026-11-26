@@ -11,7 +11,21 @@
 #   C: learned routing, no acquired knowledge
 #   D: acquired knowledge and learned routing
 # A one-line summary per episode, then the statistics of each configuration,
-# are printed at the end (complete reports stay available with `inspect`). Statistics of
+# are printed at the end (complete reports stay available with `inspect`).
+#
+# With AUTONOMOUS_AI_STUDY=activities, the configurations compare instead
+# the cognitive activities, all with knowledge and routing:
+#   M: action only
+#   U: action and the unconscious (idle --without-dreams)
+#   R: action and dreams (idle --without-reflection)
+#   F: the complete architecture
+# After each round over the events, the intelligence may undertake up to
+# AUTONOMOUS_AI_IDLE activities (default 10) on its own initiative.
+# With AUTONOMOUS_AI_TEST_EVENTS=<dir>, events never seen during training
+# are then submitted to a copy of each trained memory, to measure
+# generalisation; their summaries are printed separately.
+# Adding --without-cache to AUTONOMOUS_AI_OPTIONS disables the reuse of
+# acquired data, to tell cognitive gains from technical ones. Statistics of
 # B, C and D also include the training episodes, which ran under the full
 # configuration (label "knowledge=true routing=true").
 set -euo pipefail
@@ -66,14 +80,40 @@ for event in "${files[@]}"; do
   seed=$((seed + 1))
 done
 
-declare -A flags=(
-  [A]="--without-knowledge --without-routing"
-  [B]="--without-routing"
-  [C]="--without-knowledge"
-  [D]=""
-)
+idle_options=()
 
-for configuration in A B C D; do
+if [ "${4:-}" = "--offline" ]; then
+  idle_options+=(--offline)
+fi
+
+idle() {
+  local memory=$1 seed=$2
+  shift 2
+  "$binary" idle --memory "$memory" --resources "$resources" --seed "$seed" \
+    --max-activities "${AUTONOMOUS_AI_IDLE:-10}" "${idle_options[@]}" "$@"
+}
+
+if [ "${AUTONOMOUS_AI_STUDY:-}" = activities ]; then
+  configurations=(M U R F)
+  declare -A flags=([M]="" [U]="" [R]="" [F]="")
+  declare -A activities=(
+    [M]=""
+    [U]="--without-dreams"
+    [R]="--without-reflection"
+    [F]="--"
+  )
+else
+  configurations=(A B C D)
+  declare -A flags=(
+    [A]="--without-knowledge --without-routing"
+    [B]="--without-routing"
+    [C]="--without-knowledge"
+    [D]=""
+  )
+  declare -A activities=([A]="" [B]="" [C]="" [D]="")
+fi
+
+for configuration in "${configurations[@]}"; do
   memory="$workspace/$configuration.bin"
 
   if [ "$configuration" != A ]; then
@@ -86,9 +126,31 @@ for configuration in A B C D; do
       run "$memory" "$seed" "$event" ${flags[$configuration]}
       seed=$((seed + 1))
     done
+
+    if [ -n "${activities[$configuration]}" ]; then
+      printf '\n--- %s: activities after round %d\n' "$configuration" "$((iteration + 1))"
+      # shellcheck disable=SC2086
+      idle "$memory" "$seed" $(printf '%s' "${activities[$configuration]}" | sed 's/^--$//')
+      seed=$((seed + 1))
+    fi
   done
 
-  printf '\n=== Configuration %s (%s)\n' "$configuration" "${flags[$configuration]:-full}"
+  printf '\n=== Configuration %s (%s)\n' "$configuration" "${flags[$configuration]:-${activities[$configuration]:-default}}"
   "$binary" inspect --memory "$memory" --section summary
   "$binary" inspect --memory "$memory" --section statistics
+
+  if [ -n "${AUTONOMOUS_AI_TEST_EVENTS:-}" ]; then
+    test_memory="$workspace/$configuration.test.bin"
+    cp "$memory" "$test_memory"
+    before=$("$binary" inspect --memory "$test_memory" --section summary | wc -l)
+
+    for event in $(find "$AUTONOMOUS_AI_TEST_EVENTS" -maxdepth 1 -name '*.ron' | sort); do
+      # shellcheck disable=SC2086
+      run "$test_memory" "$seed" "$event" ${flags[$configuration]}
+      seed=$((seed + 1))
+    done
+
+    printf '\n=== Configuration %s on unseen events\n' "$configuration"
+    "$binary" inspect --memory "$test_memory" --section summary | sed -n "1p;$((before + 1)),\$p"
+  fi
 done

@@ -17,7 +17,26 @@ pub(crate) enum Arguments {
         scarcity_weight: Option<f64>,
         minimum_utility: Option<f64>,
         budgets: BTreeMap<String, f64>,
+        acquisition_cache: bool,
         output: Output,
+    },
+    /// Lets the intelligence examine itself and dream on its own initiative.
+    Idle {
+        memory: PathBuf,
+        resources: PathBuf,
+        seed: Option<u64>,
+        offline: bool,
+        maximum_activities: usize,
+        reflection: bool,
+        dreams: bool,
+        cost_weight: Option<f64>,
+        minimum_worth: f64,
+    },
+    /// Reverts a correction made by the examination of the cognition.
+    Revert {
+        memory: PathBuf,
+        correction: String,
+        reason: String,
     },
     /// Prints a section of the persistent memory.
     Inspect { memory: PathBuf, section: String },
@@ -36,8 +55,14 @@ impl Arguments {
         "                    [--scarcity-weight <w>] [--minimum-utility <u>]\n",
         "                    [--resource-budget <resource>=<units>]...\n",
         "                    [--summary | --detailed]   < event.ron\n",
+        "                    [--without-cache]\n",
+        "  autonomous-ai idle --memory <memory.bin> --resources <dir> [--seed <n>] [--offline]\n",
+        "                    [--max-activities <n>] [--without-reflection] [--without-dreams]\n",
+        "                    [--cost-weight <per-second>] [--minimum-worth <w>]\n",
+        "  autonomous-ai revert --memory <memory.bin> --correction <id> [--reason <text>]\n",
         "  autonomous-ai inspect --memory <memory.bin>\n",
-        "                    [--section summary|statistics|knowledge|hypotheses|scopes|routing|resources|experiences]\n",
+        "                    [--section summary|statistics|knowledge|hypotheses|scopes|routing|\n",
+        "                               resources|experiences|dreams|corrections|activities]\n",
         "  autonomous-ai relearn --memory <memory.bin>\n",
         "  autonomous-ai modules",
     );
@@ -58,6 +83,13 @@ impl Arguments {
         let mut scarcity_weight = None;
         let mut minimum_utility = None;
         let mut budgets = BTreeMap::new();
+        let mut acquisition_cache = true;
+        let mut maximum_activities = 10;
+        let mut reflection = true;
+        let mut dreams = true;
+        let mut minimum_worth = 0.2;
+        let mut correction = None;
+        let mut reason = "reverted on request".to_owned();
         let mut output = Output::Report;
 
         while let Some(option) = arguments.next() {
@@ -99,6 +131,17 @@ impl Arguments {
                 "--without-knowledge" => acquired_knowledge = false,
                 "--without-routing" => learned_routing = false,
                 "--offline" => offline = true,
+                "--without-cache" => acquisition_cache = false,
+                "--without-reflection" => reflection = false,
+                "--without-dreams" => dreams = false,
+                "--max-activities" => {
+                    maximum_activities = value()?.parse().map_err(|_| "Invalid activity budget")?
+                }
+                "--minimum-worth" => {
+                    minimum_worth = value()?.parse().map_err(|_| "Invalid minimum worth")?
+                }
+                "--correction" => correction = Some(value()?),
+                "--reason" => reason = value()?,
                 "--detailed" => output = Output::Detailed,
                 "--summary" => output = Output::Summary,
                 other => return Err(format!("Unknown option {other}\n{}", Self::USAGE)),
@@ -124,7 +167,25 @@ impl Arguments {
                 scarcity_weight,
                 minimum_utility,
                 budgets,
+                acquisition_cache,
                 output,
+            }),
+            "idle" => Ok(Self::Idle {
+                memory: memory()?,
+                resources: resources.ok_or(format!("--resources is required\n{}", Self::USAGE))?,
+                seed,
+                offline,
+                maximum_activities,
+                reflection,
+                dreams,
+                cost_weight,
+                minimum_worth,
+            }),
+            "revert" => Ok(Self::Revert {
+                memory: memory()?,
+                correction: correction
+                    .ok_or(format!("--correction is required\n{}", Self::USAGE))?,
+                reason,
             }),
             "inspect" => Ok(Self::Inspect {
                 memory: memory()?,

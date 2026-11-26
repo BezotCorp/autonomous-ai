@@ -21,6 +21,9 @@ pub(crate) struct LearningParameters {
     /// verified: `prior_changes` over `prior_change_seconds`.
     prior_changes: f64,
     prior_change_seconds: f64,
+    /// Weight of one simulated (dreamt) outcome relative to a real one in
+    /// the learned estimates. 0 ignores what dreams taught.
+    simulation_weight: f64,
     /// Expected utility below which no candidate is considered worth trying
     /// and the episode stops. The default never stops on this ground.
     minimum_utility: f64,
@@ -37,6 +40,7 @@ impl Default for LearningParameters {
             prior_failures: 1.0,
             cost_weight_per_second: 0.01,
             scarcity_weight: 1.0,
+            simulation_weight: 0.5,
             prior_changes: 1.0,
             prior_change_seconds: 86_400.0,
             minimum_utility: 0.0,
@@ -81,6 +85,10 @@ impl LearningParameters {
 
     pub(crate) fn scarcity_weight(&self) -> f64 {
         self.scarcity_weight
+    }
+
+    pub(crate) fn simulation_weight(&self) -> f64 {
+        self.simulation_weight
     }
 
     pub(crate) fn change_prior(&self) -> ChangePrior {

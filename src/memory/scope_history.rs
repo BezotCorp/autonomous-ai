@@ -52,6 +52,19 @@ impl ScopeHistory {
         changed
     }
 
+    /// The history as known at an earlier instant (its later
+    /// verifications are not separated, only the last date is bounded).
+    pub(crate) fn as_of(&self, instant: DateTime<Utc>) -> Option<Self> {
+        if self.first_observed_at > instant {
+            return None;
+        }
+
+        let mut past = self.clone();
+
+        past.last_verified_at = past.last_verified_at.min(instant);
+        Some(past)
+    }
+
     pub(crate) fn revision(&self) -> Option<&str> {
         self.revision.as_deref()
     }
