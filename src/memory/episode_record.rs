@@ -43,6 +43,8 @@ pub(crate) struct EpisodeRecord {
     event: Option<Event>,
     corrections: Vec<String>,
     experiments: Vec<ExperimentRequest>,
+    influences_applied: Vec<String>,
+    influences_proposed: Vec<String>,
 }
 
 impl EpisodeRecord {
@@ -85,6 +87,8 @@ impl EpisodeRecord {
             event: None,
             corrections: Vec::new(),
             experiments: Vec::new(),
+            influences_applied: Vec::new(),
+            influences_proposed: Vec::new(),
         }
     }
 
@@ -113,6 +117,22 @@ impl EpisodeRecord {
         self.corrections = corrections;
         self.experiments = experiments;
         self
+    }
+
+    /// Influences of the unconscious present in the episode, and those the
+    /// episode (a reflection) proposed.
+    pub(crate) fn with_influences(mut self, applied: Vec<String>, proposed: Vec<String>) -> Self {
+        self.influences_applied = applied;
+        self.influences_proposed = proposed;
+        self
+    }
+
+    pub(crate) fn influences_applied(&self) -> &[String] {
+        &self.influences_applied
+    }
+
+    pub(crate) fn influences_proposed(&self) -> &[String] {
+        &self.influences_proposed
     }
 
     pub(crate) fn corrections(&self) -> &[String] {

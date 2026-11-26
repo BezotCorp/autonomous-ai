@@ -4,6 +4,7 @@ mod cognition;
 mod consumables;
 mod engine;
 mod events;
+mod influences;
 mod interface;
 mod mathematics;
 mod memory;

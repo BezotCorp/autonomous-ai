@@ -6,6 +6,7 @@ pub(crate) mod module_environment;
 pub(crate) mod module_output;
 pub(crate) mod module_registry;
 pub(crate) mod proposal;
+pub(crate) mod reflections;
 #[cfg(test)]
 pub(crate) mod scripted_module;
 #[cfg(test)]

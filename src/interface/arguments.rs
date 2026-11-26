@@ -18,6 +18,7 @@ pub(crate) enum Arguments {
         minimum_utility: Option<f64>,
         budgets: BTreeMap<String, f64>,
         acquisition_cache: bool,
+        influences: bool,
         output: Output,
     },
     /// Lets the intelligence examine itself and dream on its own initiative.
@@ -55,14 +56,14 @@ impl Arguments {
         "                    [--scarcity-weight <w>] [--minimum-utility <u>]\n",
         "                    [--resource-budget <resource>=<units>]...\n",
         "                    [--summary | --detailed]   < event.ron\n",
-        "                    [--without-cache]\n",
+        "                    [--without-cache] [--without-influences]\n",
         "  autonomous-ai idle --memory <memory.bin> --resources <dir> [--seed <n>] [--offline]\n",
         "                    [--max-activities <n>] [--without-reflection] [--without-dreams]\n",
         "                    [--cost-weight <per-second>] [--minimum-worth <w>]\n",
         "  autonomous-ai revert --memory <memory.bin> --correction <id> [--reason <text>]\n",
         "  autonomous-ai inspect --memory <memory.bin>\n",
         "                    [--section summary|statistics|knowledge|hypotheses|scopes|routing|\n",
-        "                               resources|experiences|dreams|corrections|activities]\n",
+        "                               resources|experiences|dreams|corrections|activities|influences]\n",
         "  autonomous-ai relearn --memory <memory.bin>\n",
         "  autonomous-ai modules",
     );
@@ -84,6 +85,7 @@ impl Arguments {
         let mut minimum_utility = None;
         let mut budgets = BTreeMap::new();
         let mut acquisition_cache = true;
+        let mut influences = true;
         let mut maximum_activities = 10;
         let mut reflection = true;
         let mut dreams = true;
@@ -132,6 +134,7 @@ impl Arguments {
                 "--without-routing" => learned_routing = false,
                 "--offline" => offline = true,
                 "--without-cache" => acquisition_cache = false,
+                "--without-influences" => influences = false,
                 "--without-reflection" => reflection = false,
                 "--without-dreams" => dreams = false,
                 "--max-activities" => {
@@ -168,6 +171,7 @@ impl Arguments {
                 minimum_utility,
                 budgets,
                 acquisition_cache,
+                influences,
                 output,
             }),
             "idle" => Ok(Self::Idle {

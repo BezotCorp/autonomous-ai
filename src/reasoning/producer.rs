@@ -9,6 +9,10 @@ pub(crate) enum Producer {
     Perception,
     Resource(String),
     Module(String),
+    /// Injected by the unconscious (an influence, by its identifier).
+    Unconscious(String),
+    /// Introduced by the imagination during a dream.
+    Imagination(String),
 }
 
 impl fmt::Display for Producer {
@@ -17,6 +21,8 @@ impl fmt::Display for Producer {
             Self::Perception => write!(formatter, "perception"),
             Self::Resource(name) => write!(formatter, "resource:{name}"),
             Self::Module(name) => write!(formatter, "module:{name}"),
+            Self::Unconscious(name) => write!(formatter, "unconscious:{name}"),
+            Self::Imagination(name) => write!(formatter, "imagination:{name}"),
         }
     }
 }

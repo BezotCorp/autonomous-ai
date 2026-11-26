@@ -105,7 +105,12 @@ impl Consolidation {
         }
 
         for node in graph.valid_nodes() {
+            // Conjectures injected by the unconscious stay its influences.
             if node.kind() == EpistemicKind::Hypothesis
+                && !matches!(
+                    node.producer(),
+                    crate::reasoning::producer::Producer::Unconscious(_)
+                )
                 && let Some(rule) = node.content().rule()
                 && knowledge.propose_hypothesis(
                     rule.clone(),

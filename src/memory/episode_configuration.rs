@@ -3,8 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    acquisition::access_mode::AccessMode, engine::learning_parameters::LearningParameters,
-    memory::activity::Activity,
+    acquisition::access_mode::AccessMode,
+    engine::learning_parameters::LearningParameters,
+    memory::{
+        activity::Activity, imagined_capability_spec::ImaginedCapabilitySpec,
+        imagined_element::ImaginedElement,
+    },
 };
 
 /// Conditions under which an episode ran, needed to compare experiments.
@@ -21,6 +25,11 @@ pub(crate) struct EpisodeConfiguration {
     access: AccessMode,
     excluded_modules: BTreeSet<String>,
     acquisition_cache: bool,
+    influences: bool,
+    excluded_influences: BTreeSet<uuid::Uuid>,
+    maximum_invocations: Option<usize>,
+    imagined_elements: Vec<ImaginedElement>,
+    imagined_capabilities: Vec<ImaginedCapabilitySpec>,
 }
 
 impl EpisodeConfiguration {
@@ -37,6 +46,11 @@ impl EpisodeConfiguration {
             access: AccessMode::Live,
             excluded_modules: BTreeSet::new(),
             acquisition_cache: true,
+            influences: true,
+            excluded_influences: BTreeSet::new(),
+            maximum_invocations: None,
+            imagined_elements: Vec::new(),
+            imagined_capabilities: Vec::new(),
         }
     }
 
@@ -79,6 +93,55 @@ impl EpisodeConfiguration {
         self
     }
 
+    /// Leaves the context of the episode free of any influence of the
+    /// unconscious (dreams, reflection, or the conscious alone).
+    pub(crate) fn without_influences(mut self) -> Self {
+        self.influences = false;
+        self
+    }
+
+    /// Leaves out particular influences (to test what they change).
+    pub(crate) fn excluding_influences(mut self, excluded: BTreeSet<uuid::Uuid>) -> Self {
+        self.excluded_influences = excluded;
+        self
+    }
+
+    pub(crate) fn with_maximum_invocations(mut self, maximum: usize) -> Self {
+        self.maximum_invocations = Some(maximum);
+        self
+    }
+
+    /// Setting of a dream scene: imagined elements and capabilities.
+    pub(crate) fn imagining(
+        mut self,
+        elements: Vec<ImaginedElement>,
+        capabilities: Vec<ImaginedCapabilitySpec>,
+    ) -> Self {
+        self.imagined_elements = elements;
+        self.imagined_capabilities = capabilities;
+        self
+    }
+
+    pub(crate) fn imagined_elements(&self) -> &[ImaginedElement] {
+        &self.imagined_elements
+    }
+
+    pub(crate) fn imagined_capabilities(&self) -> &[ImaginedCapabilitySpec] {
+        &self.imagined_capabilities
+    }
+
+    pub(crate) fn influenced(&self) -> bool {
+        self.influences
+    }
+
+    pub(crate) fn excludes_influence(&self, influence: uuid::Uuid) -> bool {
+        self.excluded_influences.contains(&influence)
+    }
+
+    pub(crate) fn maximum_invocations(&self) -> Option<usize> {
+        self.maximum_invocations
+    }
+
     pub(crate) fn activity(&self) -> Activity {
         self.activity
     }
@@ -108,11 +171,12 @@ impl EpisodeConfiguration {
             .collect();
 
         format!(
-            "activity={} knowledge={} routing={} cache={} cost_weight={} scarcity_weight={} minimum_utility={}{}",
+            "activity={} knowledge={} routing={} cache={} influences={} cost_weight={} scarcity_weight={} minimum_utility={}{}",
             self.activity.label(),
             self.acquired_knowledge,
             self.learned_routing,
             self.acquisition_cache,
+            self.influences,
             self.cost_weight_per_second,
             self.scarcity_weight,
             self.minimum_utility,

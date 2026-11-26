@@ -4,15 +4,16 @@ use uuid::Uuid;
 
 use crate::{
     engine::{
-        dreaming::Dreaming, intelligence::Intelligence, learning_parameters::LearningParameters,
+        dreaming::Dreaming, imagination::Imagination, intelligence::Intelligence,
+        learning_parameters::LearningParameters,
     },
     events::event::Event,
     mathematics::{beta_distribution::BetaDistribution, random_source::RandomSource},
     memory::{
-        activity::Activity, activity_record::ActivityRecord, answer_status::AnswerStatus,
-        dream_mode::DreamMode, dream_variant::DreamVariant, dream_verdict::DreamVerdict,
-        episode_configuration::EpisodeConfiguration, experiment_request::ExperimentRequest,
-        persistent_memory::PersistentMemory, routing_memory::RoutingMemory,
+        activity::Activity, activity_record::ActivityRecord, dream_variant::DreamVariant,
+        dream_verdict::DreamVerdict, episode_configuration::EpisodeConfiguration,
+        experiment_request::ExperimentRequest, persistent_memory::PersistentMemory,
+        routing_memory::RoutingMemory,
     },
     representation::{statement::Statement, term::Term},
 };
@@ -42,7 +43,7 @@ struct Prospect {
 enum Task {
     Reflect(Statement),
     Experiment(usize),
-    Explore(Uuid, DreamMode),
+    Spontaneous,
 }
 
 impl<'a> Autonomy<'a> {
@@ -163,38 +164,32 @@ impl<'a> Autonomy<'a> {
                 });
             }
 
-            for mode in [DreamMode::Historical, DreamMode::Reinterpretation] {
-                let Some(episode) =
-                    actions.iter().rev().find(|episode| {
-                        episode.event().is_some()
-                            && !memory.dreams().dreams().iter().any(|dream| {
-                                dream.original() == episode.id() && dream.mode() == mode
-                            })
-                    })
-                else {
-                    continue;
-                };
+            // A dream needs no problem nor request: it may begin anytime.
+            let last = memory
+                .dreams()
+                .dreams()
+                .last()
+                .map(|dream| dream.started_at());
+            let new_experiences = actions
+                .iter()
+                .filter(|episode| last.is_none_or(|last| episode.started_at() > last))
+                .count();
+            let unexamined = memory
+                .dreams()
+                .dreams()
+                .iter()
+                .filter(|dream| !memory.dreams().is_examined(dream.id()))
+                .count();
 
-                let undetermined = episode
-                    .answers()
-                    .iter()
-                    .any(|answer| answer.status() == AnswerStatus::Undetermined);
-                let useless = episode
-                    .invocations()
-                    .iter()
-                    .filter(|invocation| !invocation.outcome().is_success(true))
-                    .count();
-
-                options.push(Prospect {
-                    activity: Activity::Dream,
-                    focus: format!("dream:explore:{mode:?}"),
-                    features: vec![
-                        format!("undetermined:{undetermined}"),
-                        format!("useless_invocations:{}", Self::bucket(useless)),
-                    ],
-                    task: Task::Explore(episode.id(), mode),
-                });
-            }
+            options.push(Prospect {
+                activity: Activity::Dream,
+                focus: "dream:spontaneous".to_owned(),
+                features: vec![
+                    format!("new_experiences:{}", Self::bucket(new_experiences)),
+                    format!("unexamined_dreams:{}", Self::bucket(unexamined)),
+                ],
+                task: Task::Spontaneous,
+            });
         }
 
         options
@@ -206,6 +201,7 @@ impl<'a> Autonomy<'a> {
             Some(DreamVariant::Reorder { .. }) => "reorder",
             Some(DreamVariant::Ablation { .. }) => "ablation",
             Some(DreamVariant::Scarcity { .. }) => "scarcity",
+            Some(DreamVariant::WithoutInfluence { .. }) => "influence",
         }
     }
 
@@ -298,18 +294,9 @@ impl<'a> Autonomy<'a> {
                     return (false, "experiment no longer pending".to_owned());
                 };
 
-                self.dream(memory, &request, seed)
+                self.dream(memory, Some(&request), seed)
             }
-            Task::Explore(episode, mode) => {
-                let request = ExperimentRequest::new(
-                    *episode,
-                    *mode,
-                    None,
-                    "spontaneous exploration of a past experience".to_owned(),
-                );
-
-                self.dream(memory, &request, seed)
-            }
+            Task::Spontaneous => self.dream(memory, None, seed),
         }
     }
 
@@ -337,7 +324,9 @@ impl<'a> Autonomy<'a> {
         let report = self.intelligence.reason(
             &event,
             memory,
-            EpisodeConfiguration::new(seed, true, true).with_activity(Activity::Reflection),
+            EpisodeConfiguration::new(seed, true, true)
+                .with_activity(Activity::Reflection)
+                .without_influences(),
             false,
         );
         let episode = report.episode();
@@ -366,50 +355,73 @@ impl<'a> Autonomy<'a> {
         )
     }
 
+    /// Dreams, from a requested experiment or spontaneously. Every dream is
+    /// kept; for deciding when to dream, it counts as worthwhile when it
+    /// brought something new (a need, a conjecture or a capability never
+    /// met in earlier dreams) or an informative replay.
     fn dream(
         &self,
         memory: &mut PersistentMemory,
-        request: &ExperimentRequest,
+        request: Option<&ExperimentRequest>,
         seed: u64,
     ) -> (bool, String) {
-        let Some(original) = memory.experiences().find(request.episode()).cloned() else {
-            return (
-                false,
-                "the experience to replay is no longer recorded".to_owned(),
-            );
+        let dream = Imagination::new(self.intelligence, memory, seed).dream(request);
+        let items = |dream: &crate::memory::dream_record::DreamRecord| -> Vec<String> {
+            dream
+                .scenes()
+                .iter()
+                .flat_map(|scene| {
+                    scene
+                        .emerged_needs()
+                        .iter()
+                        .map(|need| format!("need {}", need.signature()))
+                        .chain(
+                            scene
+                                .capabilities()
+                                .iter()
+                                .map(|capability| format!("capability {}", capability.supplies())),
+                        )
+                        .collect::<Vec<_>>()
+                })
+                .chain(
+                    dream
+                        .hypotheses()
+                        .iter()
+                        .map(|rule| format!("conjecture {rule}")),
+                )
+                .collect()
         };
-
-        let dream = Dreaming::dream(
-            self.intelligence,
-            memory,
-            &original,
-            request.mode(),
-            request.variant().cloned(),
-            request.reason().to_owned(),
-            seed,
-        );
-
-        // A dream is worth it when it teaches something: a cheaper way, an
-        // answer to verify, a capability shown unnecessary or necessary,
-        // or a new conjecture.
-        let ablation = matches!(request.variant(), Some(DreamVariant::Ablation { .. }));
-        let worthwhile = match dream.verdict() {
-            DreamVerdict::Cheaper | DreamVerdict::MoreAnswers => true,
-            DreamVerdict::Equivalent | DreamVerdict::Worse => ablation,
-            DreamVerdict::Failed => false,
-        } || !dream.hypotheses().is_empty();
-
+        let known: BTreeSet<String> = memory.dreams().dreams().iter().flat_map(items).collect();
+        let novel = items(&dream)
+            .into_iter()
+            .filter(|item| !known.contains(item))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let informative = dream.replays().any(|scene| {
+            matches!(
+                scene.verdict(),
+                Some(DreamVerdict::Cheaper | DreamVerdict::MoreAnswers)
+            ) || (matches!(scene.variant(), Some(DreamVariant::Ablation { .. }))
+                && scene.verdict() != Some(DreamVerdict::Failed))
+        });
+        let worthwhile = novel > 0 || informative;
         let summary = format!(
-            "{:?} {} of {}{}: {:?}; {}",
-            request.mode(),
+            "{} ({}): {} scenes [{}], {novel} new elements{}",
+            dream.reason(),
             request
-                .variant()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "replay".to_owned()),
-            original.event_id(),
-            format_args!(" ({})", request.reason()),
-            dream.verdict(),
-            dream.findings().join("; ")
+                .and_then(|request| request.variant().map(ToString::to_string))
+                .unwrap_or_else(|| "free".to_owned()),
+            dream.scenes().len(),
+            dream
+                .scenes()
+                .iter()
+                .map(|scene| format!("{}: {}", scene.transition(), scene.mechanisms().join("+")))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            dream
+                .replays()
+                .map(|scene| format!("; {:?} {}", scene.verdict(), scene.findings().join("; ")))
+                .collect::<String>()
         );
 
         Dreaming::integrate(memory, dream);
@@ -424,18 +436,25 @@ mod tests {
 
     use super::Autonomy;
     use crate::{
-        capabilities::{evidence_review::EvidenceReview, learning_review::LearningReview},
+        capabilities::{
+            dream_interpretation::DreamInterpretation, evidence_review::EvidenceReview,
+            learning_review::LearningReview, logical_inference::LogicalInference,
+        },
         cognition::{module_registry::ModuleRegistry, scripted_module::ScriptedModule},
         engine::{
-            dreaming::Dreaming, intelligence::Intelligence, learning_parameters::LearningParameters,
+            dreaming::Dreaming, imagination::Imagination, intelligence::Intelligence,
+            learning_parameters::LearningParameters, memory_correction::MemoryCorrection,
         },
         events::event::Event,
+        influences::{influence::Influence, influence_kind::InfluenceKind},
         memory::{
-            activity::Activity, correction::Correction, dream_mode::DreamMode,
-            dream_variant::DreamVariant, dream_verdict::DreamVerdict,
-            episode_configuration::EpisodeConfiguration, hypothesis_status::HypothesisStatus,
+            activity::Activity, answer_status::AnswerStatus, correction::Correction,
+            dream_mode::DreamMode, dream_record::DreamRecord, dream_variant::DreamVariant,
+            dream_verdict::DreamVerdict, episode_configuration::EpisodeConfiguration,
+            experiment_request::ExperimentRequest, hypothesis_status::HypothesisStatus,
             persistent_memory::PersistentMemory,
         },
+        reasoning::epistemic_kind::EpistemicKind,
         resources::initial_resources::InitialResources,
     };
 
@@ -464,6 +483,7 @@ mod tests {
         if reflective {
             registry.register(EvidenceReview::new());
             registry.register(LearningReview::new());
+            registry.register(DreamInterpretation::new());
         }
 
         Intelligence::new(
@@ -473,8 +493,28 @@ mod tests {
         )
     }
 
+    fn without(modules: &[&str]) -> BTreeSet<String> {
+        modules.iter().map(|module| (*module).to_owned()).collect()
+    }
+
+    fn replay(
+        intelligence: &Intelligence,
+        memory: &PersistentMemory,
+        episode: uuid::Uuid,
+        mode: DreamMode,
+        variant: Option<DreamVariant>,
+        seed: u64,
+    ) -> DreamRecord {
+        Imagination::new(intelligence, memory, seed).dream(Some(&ExperimentRequest::new(
+            episode,
+            mode,
+            variant,
+            "test".to_owned(),
+        )))
+    }
+
     #[test]
-    fn dreams_replay_recorded_data_and_leave_the_rest_missing() {
+    fn replays_recorded_data_and_leaves_the_rest_missing() {
         let intelligence = intelligence(false, false);
         let mut memory = PersistentMemory::default();
 
@@ -487,7 +527,6 @@ mod tests {
 
         let original = memory.experiences().episodes()[0].clone();
 
-        // The memory as it stood before that experience knew nothing of it.
         assert!(
             memory
                 .as_of(original.started_at())
@@ -496,28 +535,24 @@ mod tests {
                 .is_empty()
         );
 
-        let dream = Dreaming::dream(
+        let dream = replay(
             &intelligence,
             &memory,
-            &original,
+            original.id(),
             DreamMode::Historical,
             None,
-            "test".to_owned(),
             2,
         );
+        let scene = dream.replays().next().unwrap();
 
         assert!(
             matches!(
-                dream.verdict(),
-                DreamVerdict::Equivalent | DreamVerdict::Cheaper
+                scene.verdict(),
+                Some(DreamVerdict::Equivalent | DreamVerdict::Cheaper)
             ),
             "{dream:#?}"
         );
-
-        let episode = dream.episode().unwrap();
-
-        assert_eq!(episode.activity(), Activity::Dream);
-        assert!(episode.usage().requests().is_empty() || episode.usage().refused() == 0);
+        assert_eq!(scene.episode().unwrap().activity(), Activity::Dream);
 
         // Without anything recorded, a replay cannot invent the data.
         let mut forgetful = PersistentMemory::default();
@@ -530,25 +565,23 @@ mod tests {
         );
 
         let original = forgetful.experiences().episodes()[0].clone();
-        let dream = Dreaming::dream(
+        let dream = replay(
             &intelligence,
             &forgetful,
-            &original,
+            original.id(),
             DreamMode::Reinterpretation,
             None,
-            "test".to_owned(),
             4,
         );
+        let scene = dream.replays().next().unwrap();
 
-        assert_eq!(dream.verdict(), DreamVerdict::Worse, "{dream:#?}");
+        assert_eq!(scene.verdict(), Some(DreamVerdict::Worse), "{dream:#?}");
         assert!(
-            dream
+            scene
                 .findings()
                 .iter()
                 .any(|finding| finding.contains("left missing"))
         );
-
-        // Nothing of the dream became real knowledge.
         assert_eq!(forgetful.experiences().episodes().len(), 1);
     }
 
@@ -576,7 +609,9 @@ mod tests {
                     vec!["knowledge_concern(?k, ?s)".parse().unwrap()],
                 ),
                 memory,
-                EpisodeConfiguration::new(seed, true, true).with_activity(Activity::Reflection),
+                EpisodeConfiguration::new(seed, true, true)
+                    .with_activity(Activity::Reflection)
+                    .without_influences(),
                 false,
             )
         };
@@ -588,10 +623,7 @@ mod tests {
             &HypothesisStatus::Refuted,
             "{report:#?}"
         );
-        assert_eq!(memory.corrections().records().len(), 1);
 
-        // The counterexample turns out to be unfounded: the examination
-        // reconsiders the refutation it made.
         {
             let (knowledge, _, _) = memory.parts_mut();
 
@@ -608,91 +640,358 @@ mod tests {
     }
 
     #[test]
-    fn ablation_dreams_correct_misattributed_credit_reversibly() {
+    fn corrects_attribution_only_on_accumulated_evidence_and_reversibly() {
         let intelligence = intelligence(true, true);
         let mut memory = PersistentMemory::default();
 
-        // The gatherer and the lister are first used alone, which records
-        // what they acquire.
+        // The gatherer and the lister record what they acquire.
         intelligence.reason(
             &problem("without-oracle"),
             &mut memory,
-            EpisodeConfiguration::new(1, true, true)
-                .without_modules(BTreeSet::from(["oracle".to_owned()])),
+            EpisodeConfiguration::new(1, true, true).without_modules(without(&["oracle"])),
             false,
         );
 
-        // Then the oracle alone answers, and is credited for it.
-        intelligence.reason(
-            &problem("oracle-only"),
-            &mut memory,
-            EpisodeConfiguration::new(2, true, true)
-                .without_modules(BTreeSet::from(["gatherer".to_owned(), "lister".to_owned()])),
-            false,
+        let reflect = |memory: &mut PersistentMemory, seed| {
+            intelligence.reason(
+                &Event::internal(
+                    format!("reflection-{seed}"),
+                    vec!["learning_concern(?k, ?s)".parse().unwrap()],
+                ),
+                memory,
+                EpisodeConfiguration::new(seed, true, true)
+                    .with_activity(Activity::Reflection)
+                    .without_influences(),
+                false,
+            )
+        };
+        let reassessed = |memory: &PersistentMemory| {
+            memory.corrections().records().iter().any(|record| {
+                matches!(record.correction(), Correction::ReassessInvocation { module, .. } if module == "oracle")
+            })
+        };
+
+        for round in 0..6_u64 {
+            // The oracle alone answers, and is credited for it...
+            intelligence.reason(
+                &problem(&format!("oracle-{round}")),
+                &mut memory,
+                EpisodeConfiguration::new(10 + round, true, true)
+                    .without_modules(without(&["gatherer", "lister"])),
+                false,
+            );
+
+            let original = memory.experiences().episodes().last().unwrap().clone();
+
+            // ...but the same answers are reached without it.
+            let dream = replay(
+                &intelligence,
+                &memory,
+                original.id(),
+                DreamMode::Historical,
+                Some(DreamVariant::Ablation {
+                    module: "oracle".to_owned(),
+                }),
+                100 + round,
+            );
+
+            Dreaming::integrate(&mut memory, dream);
+            reflect(&mut memory, 200 + round);
+
+            if round == 0 {
+                // One replay is no proof.
+                assert!(!reassessed(&memory));
+            }
+        }
+
+        assert!(reassessed(&memory));
+
+        let correction = memory
+            .corrections()
+            .records()
+            .iter()
+            .find(|record| matches!(record.correction(), Correction::ReassessInvocation { .. }))
+            .unwrap()
+            .id();
+
+        MemoryCorrection::revert(&mut memory, correction, "test".to_owned()).unwrap();
+
+        assert_eq!(
+            memory.corrections().reassessments().len() + 1,
+            memory
+                .corrections()
+                .records()
+                .iter()
+                .filter(|record| matches!(
+                    record.correction(),
+                    Correction::ReassessInvocation { .. }
+                ))
+                .count()
         );
+    }
 
-        let original = memory.experiences().episodes().last().unwrap().clone();
+    #[test]
+    fn gives_never_tried_alternatives_a_chance() {
+        let intelligence = intelligence(true, false);
+        let mut memory = PersistentMemory::default();
 
-        assert!(
-            original
+        // Habit forms with the gatherer...
+        for seed in 1..=5 {
+            intelligence.reason(
+                &problem(&format!("habit-{seed}")),
+                &mut memory,
+                EpisodeConfiguration::new(seed, true, true).without_modules(without(&["oracle"])),
+                false,
+            );
+        }
+
+        // ...yet the never-tried oracle still gets tried.
+        let tried = (10..50).any(|seed| {
+            intelligence.reason(
+                &problem(&format!("p{seed}")),
+                &mut memory,
+                EpisodeConfiguration::new(seed, true, true),
+                false,
+            );
+
+            memory
+                .experiences()
+                .episodes()
+                .last()
+                .unwrap()
                 .invocations()
                 .iter()
-                .any(|invocation| invocation.module() == "oracle"
-                    && invocation.outcome().is_success(true))
-        );
+                .any(|invocation| invocation.module() == "oracle")
+        });
 
-        let dream = Dreaming::dream(
-            &intelligence,
-            &memory,
-            &original,
-            DreamMode::Historical,
-            Some(DreamVariant::Ablation {
+        assert!(tried);
+    }
+
+    #[test]
+    fn measures_and_retires_influences_reversibly() {
+        let intelligence = intelligence(true, false);
+        let mut memory = PersistentMemory::default();
+
+        for seed in 1..=5 {
+            intelligence.reason(
+                &problem(&format!("habit-{seed}")),
+                &mut memory,
+                EpisodeConfiguration::new(seed, true, true).without_modules(without(&["oracle"])),
+                false,
+            );
+        }
+
+        let favour = Influence::new(
+            InfluenceKind::Favour {
                 module: "oracle".to_owned(),
-            }),
-            "is the oracle needed?".to_owned(),
-            99,
+            },
+            BTreeSet::from(["fact".to_owned()]),
+            vec!["test".to_owned()],
+            "test".to_owned(),
         );
+        let id = favour.id();
 
+        assert!(memory.influences_mut().propose(favour));
+
+        for seed in 10..20 {
+            intelligence.reason(
+                &problem(&format!("p{seed}")),
+                &mut memory,
+                EpisodeConfiguration::new(seed, true, true),
+                false,
+            );
+        }
+
+        let evidence = memory.influences().evidence()[&id];
+
+        assert_eq!(evidence.exposures(), 10);
         assert!(
-            matches!(
-                dream.verdict(),
-                DreamVerdict::Equivalent | DreamVerdict::Cheaper
-            ),
-            "{dream:#?}"
+            evidence.outcomes().0 + evidence.outcomes().1 > 0,
+            "{evidence:?}"
         );
+        assert_eq!(evidence.attribution(), "observed_contribution");
+
+        // The conscious alone is not influenced.
+        intelligence.reason(
+            &problem("alone"),
+            &mut memory,
+            EpisodeConfiguration::new(30, true, true).without_influences(),
+            false,
+        );
+        assert_eq!(memory.influences().evidence()[&id].exposures(), 10);
+
+        let correction = MemoryCorrection::apply(
+            &mut memory,
+            uuid::Uuid::now_v7(),
+            Correction::RetireInfluence { influence: id },
+            crate::memory::correction_basis::CorrectionBasis::Inconsistency {
+                detail: "test".to_owned(),
+            },
+            "test".to_owned(),
+        )
+        .unwrap();
+
+        assert!(memory.influences().active().next().is_none());
+        MemoryCorrection::revert(&mut memory, correction, "test".to_owned()).unwrap();
+        assert!(memory.influences().active().next().is_some());
+    }
+
+    #[test]
+    fn imagines_freely_without_touching_reality() {
+        let intelligence = intelligence(false, false);
+        let mut memory = PersistentMemory::default();
+
+        for seed in 1..=3 {
+            intelligence.reason(
+                &problem(&format!("p{seed}")),
+                &mut memory,
+                EpisodeConfiguration::new(seed, true, true),
+                false,
+            );
+        }
+
+        let facts_before = memory.knowledge().entries().count();
+        let mut mechanisms = BTreeSet::new();
+        let mut imagined = 0;
+
+        for seed in 0..20 {
+            let dream = Imagination::new(&intelligence, &memory, seed).dream(None);
+
+            assert!(!dream.scenes().is_empty());
+
+            for scene in dream.scenes() {
+                mechanisms.extend(scene.mechanisms().iter().cloned());
+                imagined += scene
+                    .elements()
+                    .iter()
+                    .filter(|element| element.kind() == EpistemicKind::Imagined)
+                    .count();
+
+                if let Some(episode) = scene.episode() {
+                    assert_eq!(episode.activity(), Activity::Dream);
+                    assert!(matches!(
+                        episode.configuration().access(),
+                        crate::acquisition::access_mode::AccessMode::Replay { .. }
+                    ));
+                }
+            }
+
+            Dreaming::integrate(&mut memory, dream);
+        }
+
+        assert!(imagined > 0);
+        assert!(mechanisms.len() >= 5, "{mechanisms:?}");
+        assert_eq!(memory.dreams().dreams().len(), 20);
+        // Dreams never become knowledge.
+        assert_eq!(memory.knowledge().entries().count(), facts_before);
+    }
+
+    #[test]
+    fn turns_a_dreamt_conjecture_confirmed_by_reality_into_an_influence() {
+        let mut registry = ModuleRegistry::default();
+
+        registry.register(LogicalInference::new());
+        registry.register(DreamInterpretation::new());
+
+        let intelligence = Intelligence::new(
+            registry,
+            InitialResources::default(),
+            LearningParameters::default(),
+        );
+        let mut memory = PersistentMemory::default();
+        let episode = uuid::Uuid::now_v7();
+
+        {
+            let (knowledge, _, _) = memory.parts_mut();
+
+            for entity in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
+                knowledge.record_observation(
+                    format!("bird({entity})").parse().unwrap(),
+                    None,
+                    episode,
+                );
+                knowledge.record_observation(
+                    format!("flies({entity})").parse().unwrap(),
+                    None,
+                    episode,
+                );
+            }
+        }
+
+        // A dream in which flying was associated with being a bird.
+        let dream = loop_until_conjecture(&intelligence, &memory);
 
         Dreaming::integrate(&mut memory, dream);
 
         intelligence.reason(
             &Event::internal(
                 "reflection".to_owned(),
-                vec!["learning_concern(?k, ?s)".parse().unwrap()],
+                vec!["possibility(?k, ?s)".parse().unwrap()],
             ),
             &mut memory,
-            EpisodeConfiguration::new(100, true, true).with_activity(Activity::Reflection),
+            EpisodeConfiguration::new(1, true, true)
+                .with_activity(Activity::Reflection)
+                .without_influences(),
             false,
         );
 
-        let correction = memory
-            .corrections()
-            .records()
-            .iter()
-            .find(|record| {
-                matches!(record.correction(), Correction::ReassessInvocation { module, .. } if module == "oracle")
-            })
-            .expect("no reassessment of the oracle")
-            .id();
+        assert!(
+            memory
+                .influences()
+                .active()
+                .any(|influence| matches!(influence.kind(), InfluenceKind::Conjecture { .. }))
+        );
 
-        assert!(!memory.corrections().reassessments().is_empty());
-
-        crate::engine::memory_correction::MemoryCorrection::revert(
-            &mut memory,
-            correction,
-            "test".to_owned(),
+        // The conscious, facing a new bird, can use it.
+        let event: Event = ron::de::from_str(
+            r#"(id: "tweety", source: "test", occurred_at: "2026-11-26T00:00:00Z",
+                payload: assertions(statements: ["bird(tweety)"]), questions: ["flies(tweety)"])"#,
         )
         .unwrap();
+        let report = intelligence.reason(
+            &event,
+            &mut memory,
+            EpisodeConfiguration::new(2, true, true),
+            false,
+        );
 
-        assert!(memory.corrections().reassessments().is_empty());
+        assert_eq!(
+            report.episode().answers()[0].status(),
+            AnswerStatus::Proven,
+            "{report:#?}"
+        );
+        assert!(
+            memory
+                .influences()
+                .exposures()
+                .iter()
+                .any(|exposure| exposure.supported_answer())
+        );
+    }
+
+    /// Dreams until the imagination associates flying with being a bird.
+    fn loop_until_conjecture(
+        intelligence: &Intelligence,
+        memory: &PersistentMemory,
+    ) -> DreamRecord {
+        for seed in 0..500 {
+            let dream = Imagination::new(intelligence, memory, seed).dream(None);
+            let associated = dream.scenes().iter().any(|scene| {
+                scene.elements().iter().any(|element| {
+                    element.kind() == EpistemicKind::Imagined
+                        && element
+                            .content()
+                            .rule()
+                            .is_some_and(|rule| rule.to_string() == "flies(?x) :- bird(?x)")
+                })
+            });
+
+            if associated {
+                return dream;
+            }
+        }
+
+        panic!("the imagination never associated flying with being a bird");
     }
 
     #[test]
@@ -710,7 +1009,6 @@ mod tests {
             );
         }
 
-        // Nothing is ever worth more than certainty: it abstains.
         assert!(
             Autonomy::new(&intelligence, &parameters, true, true, 1.01)
                 .run(&mut memory, 5, 1)
@@ -718,21 +1016,19 @@ mod tests {
         );
 
         let records =
-            Autonomy::new(&intelligence, &parameters, true, true, 0.0).run(&mut memory, 6, 2);
+            Autonomy::new(&intelligence, &parameters, true, true, 0.0).run(&mut memory, 8, 2);
 
-        assert_eq!(records.len(), 6);
+        assert_eq!(records.len(), 8);
         assert!(
             records
                 .iter()
                 .any(|record| record.activity() == Activity::Dream)
         );
-        assert_eq!(memory.activities().records().len(), 6);
-        assert_eq!(
-            memory
-                .real_episodes()
-                .filter(|episode| episode.activity() == Activity::Action)
-                .count(),
-            3
+        assert!(
+            records
+                .iter()
+                .any(|record| record.activity() == Activity::Reflection)
         );
+        assert_eq!(memory.activities().records().len(), 8);
     }
 }

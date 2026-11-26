@@ -34,19 +34,6 @@ impl StrategyStatistic {
         }
     }
 
-    pub(crate) fn simulated_executions(&self) -> u64 {
-        self.simulated_executions
-    }
-
-    pub(crate) fn simulated_achieved(&self) -> u64 {
-        self.simulated_achieved
-    }
-
-    pub(crate) fn mean_simulated_cost(&self) -> Option<f64> {
-        (self.simulated_executions > 0)
-            .then(|| self.simulated_cost / self.simulated_executions as f64)
-    }
-
     pub(crate) fn mean_predicted_cost(&self) -> Option<f64> {
         (self.executions > 0).then(|| self.total_predicted_cost / self.executions as f64)
     }

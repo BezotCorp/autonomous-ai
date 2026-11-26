@@ -8,7 +8,7 @@ use crate::{
     memory::{
         change_prior::ChangePrior, evidence::Evidence, hypothesis_record::HypothesisRecord,
         hypothesis_status::HypothesisStatus, knowledge_entry::KnowledgeEntry,
-        knowledge_origin::KnowledgeOrigin, scope_history::ScopeHistory, standing::Standing,
+        scope_history::ScopeHistory, standing::Standing,
     },
     representation::{
         bindings::Bindings, provenance::Provenance, rule::Rule, statement::Statement,
@@ -170,6 +170,72 @@ impl KnowledgeMemory {
         past
     }
 
+    /// Confronts a rule with what is believed: the premise matches whose
+    /// conclusion holds (confirmations, each with the facts involved) and the
+    /// premise matches whose conclusion is known to be false
+    /// (counterexamples, each with the facts showing it). The exploration
+    /// is bounded.
+    pub(crate) fn confront(
+        &self,
+        rule: &Rule,
+        limit: usize,
+    ) -> (Vec<Vec<Statement>>, Vec<Vec<Statement>>) {
+        let mut partial: Vec<(Bindings, Vec<Statement>)> = vec![(Bindings::default(), Vec::new())];
+        let mut explored = 0;
+
+        for premise in rule.premises() {
+            let mut next = Vec::new();
+
+            for (bindings, facts) in &partial {
+                let pattern = bindings.apply(premise);
+
+                for entry in self.recall(&pattern) {
+                    explored += 1;
+
+                    if explored > limit {
+                        return (Vec::new(), Vec::new());
+                    }
+
+                    if let Some(extended) = bindings.unify(premise, entry.statement()) {
+                        let mut facts = facts.clone();
+
+                        facts.push(entry.statement().clone());
+                        next.push((extended, facts));
+                    }
+                }
+            }
+
+            partial = next;
+        }
+
+        let mut confirmations = Vec::new();
+        let mut counterexamples = Vec::new();
+
+        for (bindings, mut facts) in partial {
+            let conclusion = bindings.apply(rule.conclusion());
+
+            if !conclusion.is_ground() {
+                continue;
+            }
+
+            let held = |statement: &Statement| {
+                self.facts
+                    .get(statement)
+                    .is_some_and(|entry| entry.standing().is_active())
+            };
+
+            if held(&conclusion) {
+                facts.push(conclusion);
+                confirmations.push(facts);
+            } else if held(&conclusion.complement()) {
+                facts.push(conclusion.complement());
+                counterexamples.push(facts);
+            }
+        }
+
+        (confirmations, counterexamples)
+    }
+
     pub(crate) fn entry(&self, statement: &Statement) -> Option<&KnowledgeEntry> {
         self.facts.get(statement)
     }
@@ -217,19 +283,6 @@ impl KnowledgeMemory {
                 self.hypotheses.remove(rule);
             }
         }
-    }
-
-    /// Registers a conjecture discovered in a dream, unless already known.
-    pub(crate) fn propose_dreamt_hypothesis(&mut self, rule: Rule, dream: Uuid) -> bool {
-        if self.hypotheses.contains_key(&rule) {
-            return false;
-        }
-
-        self.hypotheses.insert(
-            rule.clone(),
-            HypothesisRecord::new(rule, dream, 0).with_origin(KnowledgeOrigin::Dream),
-        );
-        true
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &KnowledgeEntry> {

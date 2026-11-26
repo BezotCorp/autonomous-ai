@@ -5,6 +5,7 @@ use crate::{
         cognitive_module::CognitiveModule, module_context::ModuleContext,
         module_descriptor::ModuleDescriptor, module_output::ModuleOutput, proposal::Proposal,
     },
+    influences::{influence::Influence, influence_kind::InfluenceKind},
     mathematics::beta_distribution::BetaDistribution,
     memory::{
         activity::Activity, correction::Correction, correction_basis::CorrectionBasis,
@@ -50,8 +51,6 @@ struct Usage {
 impl LearningReview {
     /// Recent real experiences examined.
     const WINDOW: usize = 50;
-    /// Invocations needed before judging a capability.
-    const MINIMUM_INVOCATIONS: u64 = 5;
     /// Width of the credible bounds, in standard deviations.
     const CREDIBILITY: f64 = 2.0;
     /// Bound on the simulated answers submitted for real verification.
@@ -135,10 +134,6 @@ impl LearningReview {
         let overall = successes as f64 / invocations as f64;
 
         for (module, usage) in usage {
-            if usage.invocations < Self::MINIMUM_INVOCATIONS {
-                continue;
-            }
-
             let posterior = BetaDistribution::posterior(
                 1.0,
                 1.0,
@@ -190,66 +185,318 @@ impl LearningReview {
         }
     }
 
-    /// Credit given at the time, compared with what ablation dreams showed.
-    fn attribution(output: &mut ModuleOutput, memory: &PersistentMemory) {
+    /// Credit given at the time, compared with what ablation replays
+    /// showed. One replay proves little: the replays of a capability's
+    /// removal accumulate as evidence over distinct problems, and credit is
+    /// re-assessed only once it is more credible than not that the
+    /// capability was unnecessary (or necessary); until then, further
+    /// replays are requested on other problems.
+    fn attribution(
+        output: &mut ModuleOutput,
+        memory: &PersistentMemory,
+        episodes: &[&EpisodeRecord],
+    ) {
         let reassessments = memory.corrections().reassessments();
+        let mut evidence: BTreeMap<String, BTreeMap<uuid::Uuid, (uuid::Uuid, bool)>> =
+            BTreeMap::new();
 
         for dream in memory.dreams().dreams() {
-            let Some(DreamVariant::Ablation { module }) = dream.variant() else {
-                continue;
+            for scene in dream.replays() {
+                let (Some(DreamVariant::Ablation { module }), Some(origin), Some(verdict)) =
+                    (scene.variant(), scene.origin(), scene.verdict())
+                else {
+                    continue;
+                };
+
+                let unnecessary = match verdict {
+                    DreamVerdict::Cheaper | DreamVerdict::Equivalent => true,
+                    DreamVerdict::Worse => false,
+                    DreamVerdict::MoreAnswers | DreamVerdict::Failed => continue,
+                };
+
+                evidence
+                    .entry(module.clone())
+                    .or_default()
+                    .insert(origin, (dream.id(), unnecessary));
+            }
+        }
+
+        for (module, tested) in &evidence {
+            let unnecessary = tested
+                .values()
+                .filter(|(_, unnecessary)| *unnecessary)
+                .count() as u64;
+            let necessary = tested.len() as u64 - unnecessary;
+            let posterior = BetaDistribution::posterior(1.0, 1.0, unnecessary, necessary);
+            let deviation = posterior.variance().sqrt() * Self::CREDIBILITY;
+            let verdict = if posterior.mean() - deviation > 0.5 {
+                Some(true)
+            } else if posterior.mean() + deviation < 0.5 {
+                Some(false)
+            } else {
+                None
             };
 
-            let Some(original) = memory.experiences().find(dream.original()) else {
-                continue;
-            };
+            let Some(unnecessary_credibly) = verdict else {
+                Self::concern(
+                    output,
+                    "uncertain_attribution",
+                    format!(
+                        "{module}: unnecessary in {unnecessary} of {} replays",
+                        tested.len()
+                    ),
+                );
 
-            let questions_asked = !original.questions().is_empty();
-            let (credited, corrected) = match dream.verdict() {
-                DreamVerdict::Cheaper | DreamVerdict::Equivalent => {
-                    (true, InvocationOutcome::Retained)
+                if let Some(episode) = episodes.iter().find(|episode| {
+                    !tested.contains_key(&episode.id())
+                        && episode
+                            .invocations()
+                            .iter()
+                            .any(|invocation| invocation.module() == module)
+                }) {
+                    output.experiment(ExperimentRequest::new(
+                        episode.id(),
+                        DreamMode::Historical,
+                        Some(DreamVariant::Ablation {
+                            module: module.clone(),
+                        }),
+                        format!("more evidence on whether {module} is needed"),
+                    ));
                 }
-                DreamVerdict::Worse => (false, InvocationOutcome::Advanced),
-                DreamVerdict::MoreAnswers | DreamVerdict::Failed => continue,
+
+                continue;
             };
 
-            for invocation in original
-                .invocations()
-                .iter()
-                .filter(|invocation| invocation.module() == module)
-            {
-                let outcome = reassessments
-                    .get(&(original.id(), invocation.step()))
-                    .copied()
-                    .unwrap_or(invocation.outcome());
+            let corrected = if unnecessary_credibly {
+                InvocationOutcome::Retained
+            } else {
+                InvocationOutcome::Advanced
+            };
 
-                if outcome.is_success(questions_asked) != credited
-                    || outcome == corrected
-                    || outcome == InvocationOutcome::Failed
-                {
+            for (origin, (dream, unnecessary)) in tested {
+                let Some(original) = memory.experiences().find(*origin) else {
+                    continue;
+                };
+
+                if *unnecessary != unnecessary_credibly {
                     continue;
                 }
 
-                let subject = format!(
-                    "{module} at step {} of {}",
-                    invocation.step(),
-                    original.event_id()
-                );
+                let questions_asked = !original.questions().is_empty();
 
-                Self::concern(output, "misattributed_credit", subject.clone());
+                for invocation in original
+                    .invocations()
+                    .iter()
+                    .filter(|invocation| invocation.module() == module)
+                {
+                    let outcome = reassessments
+                        .get(&(original.id(), invocation.step()))
+                        .copied()
+                        .unwrap_or(invocation.outcome());
+
+                    if outcome.is_success(questions_asked) != unnecessary_credibly
+                        || outcome == InvocationOutcome::Failed
+                    {
+                        continue;
+                    }
+
+                    let subject = format!(
+                        "{module} at step {} of {}",
+                        invocation.step(),
+                        original.event_id()
+                    );
+
+                    Self::concern(output, "misattributed_credit", subject.clone());
+                    output.correct(
+                        Correction::ReassessInvocation {
+                            episode: original.id(),
+                            step: invocation.step(),
+                            module: module.clone(),
+                            outcome: corrected,
+                        },
+                        CorrectionBasis::Experiment { dream: *dream },
+                        format!(
+                            "{subject}: over {} replays without {module}, the answers were kept in {unnecessary}",
+                            tested.len()
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Overall rate of verified success of the examined invocations.
+    fn baseline(usage: &BTreeMap<String, Usage>) -> f64 {
+        let (successes, invocations) =
+            usage
+                .values()
+                .fold((0, 0), |(successes, invocations), usage| {
+                    (successes + usage.successes, invocations + usage.invocations)
+                });
+
+        (successes as f64 + 1.0) / (invocations as f64 + 2.0)
+    }
+
+    /// Alternatives starved by habit: capabilities declaring the same kind
+    /// of information as a habitual one, far less tried. Their estimates
+    /// are too uncertain to be trusted either way; an influence gives them
+    /// a real chance in the situations concerned, which their real
+    /// outcomes will then confirm or not.
+    fn alternatives(
+        output: &mut ModuleOutput,
+        context: &ModuleContext<'_>,
+        usage: &BTreeMap<String, Usage>,
+        episodes: &[&EpisodeRecord],
+    ) {
+        let descriptors: Vec<_> = context
+            .capabilities()
+            .descriptors()
+            .iter()
+            .filter(|descriptor| !descriptor.plans() && !descriptor.reflects())
+            .collect();
+        let signatures: BTreeSet<&String> = descriptors
+            .iter()
+            .flat_map(|descriptor| descriptor.supplied())
+            .collect();
+        let none = Usage::default();
+
+        for signature in signatures {
+            let suppliers: Vec<&str> = descriptors
+                .iter()
+                .filter(|descriptor| descriptor.declares(signature))
+                .map(|descriptor| descriptor.name())
+                .collect();
+
+            let Some(habitual) = suppliers
+                .iter()
+                .max_by_key(|module| usage.get(**module).map_or(0, |usage| usage.invocations))
+                .copied()
+            else {
+                continue;
+            };
+            let habit = usage.get(habitual).unwrap_or(&none);
+
+            if habit.invocations == 0 {
+                continue;
+            }
+
+            let spread = |usage: &Usage| {
+                BetaDistribution::posterior(
+                    1.0,
+                    1.0,
+                    usage.successes,
+                    usage.invocations - usage.successes,
+                )
+                .variance()
+                .sqrt()
+            };
+
+            let situation: BTreeSet<String> = episodes
+                .iter()
+                .filter(|episode| habit.episodes.contains(&episode.id()))
+                .flat_map(|episode| {
+                    episode
+                        .questions()
+                        .iter()
+                        .map(|question| question.predicate().to_owned())
+                })
+                .chain(
+                    signature
+                        .rsplit_once('/')
+                        .map(|(predicate, _)| predicate.to_owned()),
+                )
+                .collect();
+
+            for alternative in suppliers.iter().filter(|module| **module != habitual) {
+                let tried = usage.get(*alternative).unwrap_or(&none);
+
+                if tried.invocations < habit.invocations && spread(tried) > spread(habit) {
+                    Self::concern(
+                        output,
+                        "starved_alternative",
+                        format!(
+                            "{alternative} supplies {signature} like {habitual}: tried {} times against {}",
+                            tried.invocations, habit.invocations
+                        ),
+                    );
+                    output.influence(Influence::new(
+                        InfluenceKind::Favour {
+                            module: (*alternative).to_owned(),
+                        },
+                        situation.clone(),
+                        vec![format!("habit:{habitual}")],
+                        format!(
+                            "{alternative} was hardly tried where {habitual} is habitually used"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Its own influences, judged on their real consequences: those whose
+    /// changed decisions credibly fared worse than decisions in general are
+    /// retired; those that changed decisions without a demonstration of
+    /// their effect are put to the test by a replay without them.
+    fn influences(output: &mut ModuleOutput, memory: &PersistentMemory, baseline: f64) {
+        let evidence = memory.influences().evidence();
+
+        for influence in memory.influences().active() {
+            let Some(evidence) = evidence.get(&influence.id()) else {
+                continue;
+            };
+            let (successes, failures) = evidence.outcomes();
+
+            if successes + failures == 0 {
+                continue;
+            }
+
+            let posterior = BetaDistribution::posterior(1.0, 1.0, successes, failures);
+            let deviation = posterior.variance().sqrt() * Self::CREDIBILITY;
+
+            if posterior.mean() + deviation < baseline {
+                Self::concern(output, "harmful_influence", influence.kind().to_string());
                 output.correct(
-                    Correction::ReassessInvocation {
-                        episode: original.id(),
-                        step: invocation.step(),
-                        module: module.clone(),
-                        outcome: corrected,
+                    Correction::RetireInfluence {
+                        influence: influence.id(),
                     },
-                    CorrectionBasis::Experiment { dream: dream.id() },
-                    if credited {
-                        format!("{subject} was credited, but the same answers were reached without {module}")
-                    } else {
-                        format!("{subject} was not credited, but answers were lost without {module}")
+                    CorrectionBasis::Outcomes {
+                        successes,
+                        failures,
+                        baseline,
                     },
+                    format!(
+                        "the decisions it changed succeeded {successes} times in {}, below the usual rate",
+                        successes + failures
+                    ),
                 );
+                continue;
+            }
+
+            if posterior.mean() - deviation > baseline {
+                Self::concern(output, "beneficial_influence", influence.kind().to_string());
+            }
+
+            if evidence.demonstrations() == (0, 0)
+                && let Some(exposure) =
+                    memory
+                        .influences()
+                        .exposures()
+                        .iter()
+                        .rev()
+                        .find(|exposure| {
+                            exposure.influence() == influence.id()
+                                && !exposure.decisive().is_empty()
+                        })
+            {
+                output.experiment(ExperimentRequest::new(
+                    exposure.episode(),
+                    DreamMode::Historical,
+                    Some(DreamVariant::WithoutInfluence {
+                        influence: influence.id(),
+                    }),
+                    format!("did {} make a difference?", influence.kind()),
+                ));
             }
         }
     }
@@ -354,14 +601,23 @@ impl LearningReview {
     fn simulated_answers(output: &mut ModuleOutput, memory: &PersistentMemory) {
         let mut submitted = 0;
 
-        for dream in memory.dreams().dreams().iter().rev() {
-            if dream.verdict() != DreamVerdict::MoreAnswers
+        for scene in memory
+            .dreams()
+            .dreams()
+            .iter()
+            .rev()
+            .flat_map(|dream| dream.replays())
+        {
+            if scene.verdict() != Some(DreamVerdict::MoreAnswers)
                 || submitted >= Self::MAXIMUM_VERIFICATIONS
             {
                 continue;
             }
 
-            let Some(original) = memory.experiences().find(dream.original()) else {
+            let Some(original) = scene
+                .origin()
+                .and_then(|origin| memory.experiences().find(origin))
+            else {
                 continue;
             };
 
@@ -396,7 +652,9 @@ impl CognitiveModule for LearningReview {
         let usage = Self::usage(memory, &episodes);
 
         Self::capabilities(&mut output, &usage, &episodes);
-        Self::attribution(&mut output, memory);
+        Self::alternatives(&mut output, context, &usage, &episodes);
+        Self::influences(&mut output, memory, Self::baseline(&usage));
+        Self::attribution(&mut output, memory, &episodes);
         Self::limitations(&mut output, &episodes);
         Self::replays(&mut output, &episodes);
         Self::strategies(&mut output, memory);

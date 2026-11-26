@@ -1,5 +1,8 @@
+use uuid::Uuid;
+
 use crate::{
-    cognition::proposal::Proposal,
+    cognition::{proposal::Proposal, reflections::Reflections},
+    influences::influence::Influence,
     memory::{
         correction::Correction, correction_basis::CorrectionBasis,
         experiment_request::ExperimentRequest,
@@ -13,8 +16,7 @@ pub(crate) struct ModuleOutput {
     proposals: Vec<Proposal>,
     notes: Vec<String>,
     plan: Option<Plan>,
-    corrections: Vec<(Correction, CorrectionBasis, String)>,
-    experiments: Vec<ExperimentRequest>,
+    reflections: Reflections,
 }
 
 impl ModuleOutput {
@@ -33,36 +35,37 @@ impl ModuleOutput {
     }
 
     /// Proposes a justified correction of the memory; only modules
-    /// declaring `reflective` may do so.
+    /// declaring `reflective` may do so (as for what follows).
     pub(crate) fn correct(
         &mut self,
         correction: Correction,
         basis: CorrectionBasis,
         justification: impl Into<String>,
     ) {
-        self.corrections
-            .push((correction, basis, justification.into()));
+        self.reflections
+            .correct(correction, basis, justification.into());
     }
 
-    /// Requests an internal experiment; only reflective modules may do so.
+    /// Requests an internal experiment.
     pub(crate) fn experiment(&mut self, request: ExperimentRequest) {
-        self.experiments.push(request);
+        self.reflections.experiment(request);
+    }
+
+    /// Proposes to influence the context of the conscious.
+    pub(crate) fn influence(&mut self, influence: Influence) {
+        self.reflections.influence(influence);
+    }
+
+    /// Reports a dream as examined.
+    pub(crate) fn examined(&mut self, dream: Uuid) {
+        self.reflections.examine(dream);
     }
 
     pub(crate) fn into_parts(self) -> (Vec<Proposal>, Vec<String>, Option<Plan>) {
         (self.proposals, self.notes, self.plan)
     }
 
-    /// Splits off the corrections and experiments, leaving the rest.
-    pub(crate) fn take_reflections(
-        &mut self,
-    ) -> (
-        Vec<(Correction, CorrectionBasis, String)>,
-        Vec<ExperimentRequest>,
-    ) {
-        (
-            std::mem::take(&mut self.corrections),
-            std::mem::take(&mut self.experiments),
-        )
+    pub(crate) fn take_reflections(&mut self) -> Reflections {
+        std::mem::take(&mut self.reflections)
     }
 }

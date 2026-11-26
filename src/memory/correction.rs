@@ -18,6 +18,8 @@ pub(crate) enum Correction {
     ReopenHypothesis { rule: Rule },
     /// A belief that should no longer be held.
     ObsoleteFact { statement: Statement },
+    /// An influence whose real consequences do not justify it any more.
+    RetireInfluence { influence: Uuid },
     /// The credit given to a past invocation, re-examined.
     ReassessInvocation {
         episode: Uuid,
@@ -34,6 +36,7 @@ impl Correction {
             Self::RefuteHypothesis { rule } | Self::ReopenHypothesis { rule } => rule.to_string(),
             Self::ObsoleteFact { statement } => statement.to_string(),
             Self::ReassessInvocation { episode, step, .. } => format!("{episode}#{step}"),
+            Self::RetireInfluence { influence } => influence.to_string(),
         }
     }
 }
@@ -44,6 +47,9 @@ impl fmt::Display for Correction {
             Self::RefuteHypothesis { rule } => write!(formatter, "refute {rule}"),
             Self::ReopenHypothesis { rule } => write!(formatter, "reopen {rule}"),
             Self::ObsoleteFact { statement } => write!(formatter, "withdraw {statement}"),
+            Self::RetireInfluence { influence } => {
+                write!(formatter, "retire influence {influence}")
+            }
             Self::ReassessInvocation {
                 episode,
                 step,

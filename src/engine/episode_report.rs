@@ -30,8 +30,9 @@ impl EpisodeReport {
         }
     }
 
-    pub(crate) fn knowledge_changes(&self) -> &ConsolidationSummary {
-        &self.knowledge_changes
+    /// The reasoning graph, when the report was asked to be detailed.
+    pub(crate) fn reasoning(&self) -> Option<&WorkingMemory> {
+        self.reasoning.as_ref()
     }
 
     pub(crate) fn episode(&self) -> &EpisodeRecord {

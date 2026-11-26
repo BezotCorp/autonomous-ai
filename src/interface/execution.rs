@@ -15,6 +15,7 @@ use crate::{
         memory_correction::MemoryCorrection,
     },
     events::event::Event,
+    influences::influence_view::InfluenceView,
     interface::{arguments::Arguments, output::Output},
     memory::{
         episode_configuration::EpisodeConfiguration, episode_summary::EpisodeSummary,
@@ -48,6 +49,7 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             minimum_utility,
             budgets,
             acquisition_cache,
+            influences,
             output,
         } => {
             let mut input = String::new();
@@ -88,9 +90,13 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
                 &event,
                 &mut persistent,
                 {
-                    let configuration =
+                    let mut configuration =
                         EpisodeConfiguration::new(seed, acquired_knowledge, learned_routing)
                             .with_resource_budgets(budgets);
+
+                    if !influences {
+                        configuration = configuration.without_influences();
+                    }
 
                     if acquisition_cache {
                         configuration
@@ -218,6 +224,22 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
                 "dreams" => write_output(persistent.dreams())?,
                 "corrections" => write_output(persistent.corrections())?,
                 "activities" => write_output(persistent.activities())?,
+                "influences" => {
+                    let evidence = persistent.influences().evidence();
+                    let views: Vec<InfluenceView> = persistent
+                        .influences()
+                        .influences()
+                        .iter()
+                        .map(|influence| {
+                            InfluenceView::new(
+                                influence,
+                                evidence.get(&influence.id()).copied().unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+
+                    write_output(&views)?
+                }
                 "knowledge" => write_output(&persistent.knowledge().entries().collect::<Vec<_>>())?,
                 "hypotheses" => {
                     write_output(&persistent.knowledge().hypotheses().collect::<Vec<_>>())?

@@ -59,7 +59,6 @@ impl<'a> CapabilityModel<'a> {
                             self.parameters.prior_successes(),
                             self.parameters.prior_failures(),
                         ),
-                        self.parameters.simulation_weight(),
                     )
                     .mean()
             })

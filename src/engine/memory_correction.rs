@@ -81,6 +81,14 @@ impl MemoryCorrection {
 
                 PreviousState::Fact(previous)
             }
+            Correction::RetireInfluence { influence } => {
+                let previous = memory.influences_mut().set_retirement(
+                    *influence,
+                    Some((chrono::Utc::now(), justification.clone())),
+                )?;
+
+                PreviousState::Influence(previous)
+            }
             Correction::ReassessInvocation {
                 episode: past,
                 step,
@@ -156,6 +164,11 @@ impl MemoryCorrection {
             ) => {
                 memory.corrections_mut().reassess(*episode, *step, previous);
                 memory.relearn_routing();
+            }
+            (Correction::RetireInfluence { influence }, PreviousState::Influence(previous)) => {
+                memory
+                    .influences_mut()
+                    .set_retirement(*influence, previous)?;
             }
             _ => return Err(format!("correction {id} has an inconsistent record")),
         }

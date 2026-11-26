@@ -19,6 +19,8 @@
 #   U: action and the unconscious (idle --without-dreams)
 #   R: action and dreams (idle --without-reflection)
 #   F: the complete architecture
+#   N: the complete architecture, the conscious ignoring the influences of
+#      the unconscious (to measure what the influences themselves bring)
 # After each round over the events, the intelligence may undertake up to
 # AUTONOMOUS_AI_IDLE activities (default 10) on its own initiative.
 # With AUTONOMOUS_AI_TEST_EVENTS=<dir>, events never seen during training
@@ -94,13 +96,14 @@ idle() {
 }
 
 if [ "${AUTONOMOUS_AI_STUDY:-}" = activities ]; then
-  configurations=(M U R F)
-  declare -A flags=([M]="" [U]="" [R]="" [F]="")
+  configurations=(M U R F N)
+  declare -A flags=([M]="" [U]="" [R]="" [F]="" [N]="--without-influences")
   declare -A activities=(
     [M]=""
     [U]="--without-dreams"
     [R]="--without-reflection"
     [F]="--"
+    [N]="--"
   )
 else
   configurations=(A B C D)

@@ -12,4 +12,5 @@ pub(crate) enum PreviousState {
     Hypothesis(Option<HypothesisRecord>),
     Fact(Option<KnowledgeEntry>),
     Outcome(Option<InvocationOutcome>),
+    Influence(Option<(chrono::DateTime<chrono::Utc>, String)>),
 }

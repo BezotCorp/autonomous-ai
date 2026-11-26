@@ -13,6 +13,7 @@ pub(crate) struct SelectionRecord {
     best_expected_utility: f64,
     candidates: Vec<(String, f64)>,
     infeasible: usize,
+    influences: Vec<uuid::Uuid>,
 }
 
 impl SelectionRecord {
@@ -29,7 +30,19 @@ impl SelectionRecord {
             best_expected_utility,
             candidates,
             infeasible,
+            influences: Vec::new(),
         }
+    }
+
+    /// Influences that changed this decision: without them another module
+    /// would have been chosen.
+    pub(crate) fn with_influences(mut self, influences: Vec<uuid::Uuid>) -> Self {
+        self.influences = influences;
+        self
+    }
+
+    pub(crate) fn influences(&self) -> &[uuid::Uuid] {
+        &self.influences
     }
 
     /// Highest expected utility (posterior mean minus expected costs) among

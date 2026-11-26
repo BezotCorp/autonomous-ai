@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     consumables::resource_state::ResourceState,
+    influences::influence_memory::InfluenceMemory,
     memory::{
         acquisition_cache::AcquisitionCache, activity::Activity, activity_log::ActivityLog,
         correction_journal::CorrectionJournal, dream_memory::DreamMemory,
@@ -31,6 +32,7 @@ pub(crate) struct PersistentMemory {
     dreams: DreamMemory,
     corrections: CorrectionJournal,
     activities: ActivityLog,
+    influences: InfluenceMemory,
 }
 
 impl PersistentMemory {
@@ -56,6 +58,14 @@ impl PersistentMemory {
 
     pub(crate) fn corrections_mut(&mut self) -> &mut CorrectionJournal {
         &mut self.corrections
+    }
+
+    pub(crate) fn influences(&self) -> &InfluenceMemory {
+        &self.influences
+    }
+
+    pub(crate) fn influences_mut(&mut self) -> &mut InfluenceMemory {
+        &mut self.influences
     }
 
     pub(crate) fn activities(&self) -> &ActivityLog {
@@ -85,6 +95,7 @@ impl PersistentMemory {
             dreams: DreamMemory::default(),
             corrections: CorrectionJournal::default(),
             activities: ActivityLog::default(),
+            influences: InfluenceMemory::default(),
         }
     }
 

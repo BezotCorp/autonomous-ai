@@ -5,13 +5,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    memory::{hypothesis_status::HypothesisStatus, knowledge_origin::KnowledgeOrigin},
+    memory::hypothesis_status::HypothesisStatus,
     representation::{rule::Rule, statement::Statement},
 };
 
 /// Persisted conjecture. A hypothesis never becomes a fact: it only
-/// accumulates independent corroborations or gets refuted. Its origin
-/// tells whether it was induced while acting or while dreaming.
+/// accumulates independent corroborations or gets refuted.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct HypothesisRecord {
     rule: Rule,
@@ -22,7 +21,6 @@ pub(crate) struct HypothesisRecord {
     status: HypothesisStatus,
     proposed_at: DateTime<Utc>,
     refuted_at: Option<DateTime<Utc>>,
-    origin: KnowledgeOrigin,
 }
 
 impl HypothesisRecord {
@@ -36,17 +34,7 @@ impl HypothesisRecord {
             status: HypothesisStatus::Open,
             proposed_at: Utc::now(),
             refuted_at: None,
-            origin: KnowledgeOrigin::Experience,
         }
-    }
-
-    pub(crate) fn with_origin(mut self, origin: KnowledgeOrigin) -> Self {
-        self.origin = origin;
-        self
-    }
-
-    pub(crate) fn origin(&self) -> KnowledgeOrigin {
-        self.origin
     }
 
     pub(crate) fn corroborations(&self) -> &BTreeSet<Statement> {

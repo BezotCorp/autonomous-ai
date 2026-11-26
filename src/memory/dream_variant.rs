@@ -13,6 +13,9 @@ pub(crate) enum DreamVariant {
     Ablation { module: String },
     /// The same problem under a simulated limit on a resource.
     Scarcity { resource: String, units: u64 },
+    /// The same problem without one influence of the unconscious, to see
+    /// whether it made a difference.
+    WithoutInfluence { influence: uuid::Uuid },
 }
 
 impl fmt::Display for DreamVariant {
@@ -21,6 +24,9 @@ impl fmt::Display for DreamVariant {
             Self::Reorder { seed } => write!(formatter, "reorder({seed})"),
             Self::Ablation { module } => write!(formatter, "without({module})"),
             Self::Scarcity { resource, units } => write!(formatter, "scarce({resource}={units})"),
+            Self::WithoutInfluence { influence } => {
+                write!(formatter, "without-influence({influence})")
+            }
         }
     }
 }

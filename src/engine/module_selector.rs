@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use uuid::Uuid;
+
 use crate::{
     consumables::resource_meter::ResourceMeter,
     engine::{candidate::Candidate, learning_parameters::LearningParameters},
@@ -15,8 +19,8 @@ use crate::{
 /// estimate being a Beta posterior. A feature never observed for a module
 /// keeps the prior, so that a new kind of situation reopens exploration
 /// instead of inheriting a judgement formed in other situations. One sample
-/// is drawn per estimate and the samples are averaged, then weighted by the
-/// stake of acting. The expected costs are subtracted: the recent duration
+/// feature is drawn and its posterior sampled (a mixture: the uncertainty of
+/// each view is preserved), then weighted by the stake of acting. The expected costs are subtracted: the recent duration
 /// of the module and the scarcity of the resources it is expected to
 /// consume, given what remains of them. Sampling instead of taking the
 /// mean keeps exploring modules whose usefulness is still uncertain.
@@ -34,31 +38,77 @@ impl<'a> ModuleSelector<'a> {
     }
 
     /// Returns the position of the chosen candidate and the trace of the choice.
+    ///
+    /// `preferences` are the influences of the unconscious bearing on some
+    /// modules: each brings its own estimate, learned from the real
+    /// consequences of the decisions it changed (uniform while untested).
+    /// One that favours a module may raise its sampled utility, one that
+    /// questions it may lower it: an alternative thus gets a real chance,
+    /// without ever being imposed. The choice that would have been made
+    /// without them is computed as well, to know which ones were decisive.
     pub(crate) fn select(
         &self,
         candidates: &[Candidate],
         meter: &ResourceMeter,
         random: &mut RandomSource,
+        preferences: &BTreeMap<String, Vec<(Uuid, bool, BetaDistribution)>>,
     ) -> Option<(usize, SelectionRecord)> {
         let evaluations: Vec<CandidateEvaluation> = candidates
             .iter()
             .map(|candidate| self.evaluate(candidate, meter, random))
             .collect();
 
+        let mut influenced = Vec::with_capacity(candidates.len());
+
+        for (candidate, evaluation) in candidates.iter().zip(&evaluations) {
+            let mut utility = evaluation.utility();
+            let mut applied = Vec::new();
+
+            for (influence, favour, posterior) in
+                preferences.get(candidate.name()).into_iter().flatten()
+            {
+                let suggested = candidate.stake() * posterior.sample(random) - evaluation.cost();
+
+                if (*favour && suggested > utility) || (!*favour && suggested < utility) {
+                    utility = suggested;
+                    applied.push(*influence);
+                }
+            }
+
+            influenced.push((utility, applied));
+        }
+
         let best_expected = evaluations
             .iter()
             .map(CandidateEvaluation::expected_utility)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        let (position, evaluation) = evaluations
+        let position = influenced
             .iter()
             .enumerate()
-            .max_by(|left, right| left.1.utility().total_cmp(&right.1.utility()))?;
+            .max_by(|left, right| left.1.0.total_cmp(&right.1.0))?
+            .0;
+        let habitual = evaluations
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.utility().total_cmp(&right.1.utility()))?
+            .0;
+
+        let decisive = if position == habitual {
+            Vec::new()
+        } else {
+            influenced[position]
+                .1
+                .iter()
+                .chain(&influenced[habitual].1)
+                .copied()
+                .collect()
+        };
 
         let competitors = candidates
             .iter()
-            .zip(&evaluations)
-            .map(|(candidate, evaluation)| (candidate.name().to_owned(), evaluation.utility()))
+            .zip(&influenced)
+            .map(|(candidate, (utility, _))| (candidate.name().to_owned(), *utility))
             .collect();
 
         let infeasible = evaluations
@@ -70,11 +120,12 @@ impl<'a> ModuleSelector<'a> {
             position,
             SelectionRecord::new(
                 candidates[position].features().to_vec(),
-                evaluation.clone(),
+                evaluations[position].clone(),
                 best_expected,
                 competitors,
                 infeasible,
-            ),
+            )
+            .with_influences(decisive),
         ))
     }
 
@@ -97,7 +148,6 @@ impl<'a> ModuleSelector<'a> {
                         self.parameters.prior_successes(),
                         self.parameters.prior_failures(),
                     ),
-                    self.parameters.simulation_weight(),
                 )
             })
             .collect();
@@ -109,11 +159,12 @@ impl<'a> ModuleSelector<'a> {
             .map(BetaDistribution::variance)
             .sum::<f64>()
             / count;
-        let sampled = posteriors
-            .iter()
-            .map(|posterior| posterior.sample(random))
-            .sum::<f64>()
-            / count;
+        // The features are a mixture of views on the situation: one of them
+        // is drawn, then its posterior sampled. Averaging samples instead
+        // would divide the uncertainty by the number of features and starve
+        // never-tried alternatives of any chance.
+        let drawn = ((random.uniform() * count) as usize).min(posteriors.len() - 1);
+        let sampled = posteriors[drawn].sample(random);
 
         let seconds = self
             .routing

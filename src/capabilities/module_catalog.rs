@@ -1,4 +1,5 @@
 use crate::{
+    capabilities::dream_interpretation::DreamInterpretation,
     capabilities::{
         cargo_observation::CargoObservation, documentation_observation::DocumentationObservation,
         evidence_review::EvidenceReview, hypothesis_formation::HypothesisFormation,
@@ -35,6 +36,7 @@ impl ModuleCatalog {
         Self::add(&mut registry, offline, StrategicPlanning::new());
         Self::add(&mut registry, offline, EvidenceReview::new());
         Self::add(&mut registry, offline, LearningReview::new());
+        Self::add(&mut registry, offline, DreamInterpretation::new());
         Self::add(&mut registry, offline, LinguisticAnalysis::new());
         Self::add(&mut registry, offline, RepositoryDiscovery::new());
         Self::add(&mut registry, offline, CargoObservation::new());

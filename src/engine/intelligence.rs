@@ -8,10 +8,12 @@ use uuid::Uuid;
 
 use crate::{
     acquisition::{access_mode::AccessMode, external_access::ExternalAccess},
+    capabilities::imagined_capability::ImaginedCapability,
     cognition::{
-        capability_model::CapabilityModel, module_context::ModuleContext,
-        module_descriptor::ModuleDescriptor, module_environment::ModuleEnvironment,
-        module_registry::ModuleRegistry, proposal::Proposal,
+        capability_model::CapabilityModel, cognitive_module::CognitiveModule,
+        module_context::ModuleContext, module_descriptor::ModuleDescriptor,
+        module_environment::ModuleEnvironment, module_registry::ModuleRegistry, proposal::Proposal,
+        reflections::Reflections,
     },
     consumables::resource_meter::ResourceMeter,
     engine::{
@@ -22,11 +24,14 @@ use crate::{
         question_answering::QuestionAnswering,
     },
     events::event::Event,
+    influences::{
+        influence::Influence, influence_exposure::InfluenceExposure, influence_kind::InfluenceKind,
+    },
+    mathematics::beta_distribution::BetaDistribution,
     mathematics::random_source::RandomSource,
     memory::{
-        acquisition_cache::AcquisitionCache, correction::Correction,
-        correction_basis::CorrectionBasis, episode_configuration::EpisodeConfiguration,
-        episode_record::EpisodeRecord, experiment_request::ExperimentRequest,
+        acquisition_cache::AcquisitionCache, answer_status::AnswerStatus,
+        episode_configuration::EpisodeConfiguration, episode_record::EpisodeRecord,
         invocation_outcome::InvocationOutcome, invocation_record::InvocationRecord,
         knowledge_exploitation::KnowledgeExploitation, knowledge_memory::KnowledgeMemory,
         persistent_memory::PersistentMemory, revision_record::RevisionRecord,
@@ -65,8 +70,7 @@ struct EpisodeTrace {
     withdrawn: Vec<(NodeId, String)>,
     plans: Vec<PlanRecord>,
     exploitation: KnowledgeExploitation,
-    corrections: Vec<(Correction, CorrectionBasis, String)>,
-    experiments: Vec<ExperimentRequest>,
+    reflections: Reflections,
 }
 
 /// What came out of integrating the proposals of one invocation.
@@ -88,6 +92,10 @@ impl Intelligence {
             resources,
             parameters,
         }
+    }
+
+    pub(crate) fn resources(&self) -> &InitialResources {
+        &self.resources
     }
 
     pub(crate) fn descriptors(&self) -> impl Iterator<Item = &ModuleDescriptor> {
@@ -151,9 +159,24 @@ impl Intelligence {
             }
         };
 
+        // Capabilities imagined in a dream exist only for its episodes.
+        let imagined: Vec<ImaginedCapability> = configuration
+            .imagined_capabilities()
+            .iter()
+            .cloned()
+            .map(ImaginedCapability::new)
+            .collect();
+        let modules: Vec<&dyn CognitiveModule> = self
+            .registry
+            .modules()
+            .iter()
+            .map(|module| module.as_ref())
+            .chain(imagined.iter().map(|module| module as &dyn CognitiveModule))
+            .collect();
+
         let mut initial_errors = Vec::new();
 
-        for (content, kind, producer, provenance) in self.initial_contents(event) {
+        for (content, kind, producer, provenance) in self.initial_contents(event, live) {
             match working.graph_mut().insert(
                 content.clone(),
                 kind,
@@ -169,12 +192,111 @@ impl Intelligence {
             }
         }
 
+        // Setting of a dream scene, each element with how it came there.
+        for element in configuration.imagined_elements() {
+            let provenance = (element.kind() == EpistemicKind::Imagined)
+                .then(|| Provenance::new("imagination", Some(element.origin().to_owned()), None));
+
+            match working.graph_mut().insert(
+                element.content().clone(),
+                element.kind(),
+                Producer::Imagination(element.origin().to_owned()),
+                Vec::new(),
+                provenance,
+                0,
+            ) {
+                Ok(insertion) => {
+                    Self::revise(&mut working, insertion.contradictions(), 0, &mut trace);
+                }
+                Err(error) => initial_errors.push(format!("{}: {error}", element.content())),
+            }
+        }
+
+        // Influences of the unconscious bearing on this situation: their
+        // contents enter as defeasible elements, their preferences weigh on
+        // the choices; nothing is imposed.
+        let situation: BTreeSet<String> = working
+            .graph()
+            .valid_nodes()
+            .filter(|node| !matches!(node.producer(), Producer::Resource(_)))
+            .flat_map(|node| Self::predicates(node.content()))
+            .collect();
+        let applicable: Vec<Influence> = if configuration.influenced() {
+            memory
+                .influences()
+                .active()
+                .filter(|influence| {
+                    influence.applies_to(&situation)
+                        && !configuration.excludes_influence(influence.id())
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let influence_evidence = memory.influences().evidence();
+        let mut injected: BTreeMap<Uuid, Vec<NodeId>> = BTreeMap::new();
+        let mut preferences: BTreeMap<String, Vec<(Uuid, bool, BetaDistribution)>> =
+            BTreeMap::new();
+
+        for influence in &applicable {
+            let id = influence.id();
+            let content = match influence.kind() {
+                InfluenceKind::Conjecture { rule } => {
+                    Some((Content::Rule(rule.clone()), EpistemicKind::Hypothesis))
+                }
+                InfluenceKind::Belief { statement } => Some((
+                    Content::Statement(statement.clone()),
+                    EpistemicKind::Hypothesis,
+                )),
+                InfluenceKind::PotentialNeed { pattern }
+                | InfluenceKind::Doubt { statement: pattern } => {
+                    Some((Content::Need(pattern.clone()), EpistemicKind::Need))
+                }
+                InfluenceKind::Favour { .. } | InfluenceKind::Question { .. } => None,
+            };
+
+            if let Some((content, kind)) = content {
+                match working.graph_mut().insert(
+                    content.clone(),
+                    kind,
+                    Producer::Unconscious(id.to_string()),
+                    Vec::new(),
+                    None,
+                    0,
+                ) {
+                    Ok(insertion) => {
+                        injected.entry(id).or_default().push(insertion.id());
+                        Self::revise(&mut working, insertion.contradictions(), 0, &mut trace);
+                    }
+                    Err(error) => initial_errors.push(format!("{content}: {error}")),
+                }
+            }
+
+            if let Some((module, favour)) = influence.kind().preference() {
+                let (successes, failures) = influence_evidence
+                    .get(&id)
+                    .map(|evidence| evidence.outcomes())
+                    .unwrap_or((0, 0));
+
+                preferences.entry(module.to_owned()).or_default().push((
+                    id,
+                    favour,
+                    BetaDistribution::posterior(
+                        self.parameters.prior_successes(),
+                        self.parameters.prior_failures(),
+                        successes,
+                        failures,
+                    ),
+                ));
+            }
+        }
+
         let remembered = self.remembered(knowledge);
         let capabilities = CapabilityModel::new(
             routing,
             &self.parameters,
-            self.registry
-                .modules()
+            modules
                 .iter()
                 .map(|module| module.descriptor().clone())
                 .collect(),
@@ -190,7 +312,7 @@ impl Intelligence {
         );
 
         let selector = ModuleSelector::new(routing, &self.parameters);
-        let mut seen = vec![0_u64; self.registry.modules().len()];
+        let mut seen = vec![0_u64; modules.len()];
         let mut invocations: Vec<InvocationRecord> = Vec::new();
         let mut previous: Option<String> = None;
 
@@ -201,7 +323,11 @@ impl Intelligence {
                 break Termination::QuestionsAnswered;
             }
 
-            if invocations.len() >= self.parameters.maximum_invocations() {
+            if invocations.len()
+                >= configuration
+                    .maximum_invocations()
+                    .unwrap_or(self.parameters.maximum_invocations())
+            {
                 break Termination::InvocationBudgetExhausted;
             }
 
@@ -211,6 +337,7 @@ impl Intelligence {
 
             let active_plan = trace.plans.iter().rev().find(|record| record.is_active());
             let mut candidates = self.candidates(
+                &modules,
                 &working,
                 &seen,
                 previous.as_deref(),
@@ -221,7 +348,7 @@ impl Intelligence {
             candidates.retain(|candidate| !configuration.excludes(candidate.name()));
 
             let Some((position, selection)) =
-                selector.select(&candidates, access.meter(), &mut random)
+                selector.select(&candidates, access.meter(), &mut random, &preferences)
             else {
                 break Termination::Quiescent;
             };
@@ -235,7 +362,7 @@ impl Intelligence {
             }
 
             let index = candidates[position].module();
-            let module = &self.registry.modules()[index];
+            let module = modules[index];
             let descriptor = module.descriptor();
             let revision_before = working.graph().revision();
             let usage_before = access.meter().usage();
@@ -259,7 +386,7 @@ impl Intelligence {
 
             let (integration, notes, plan, error) = match result {
                 Ok(mut output) => {
-                    let (corrections, experiments) = output.take_reflections();
+                    let reflections = output.take_reflections();
                     let (proposals, mut notes, plan) = output.into_parts();
                     let mut integration = Self::integrate(
                         &mut working,
@@ -272,14 +399,13 @@ impl Intelligence {
                     );
 
                     if descriptor.reflects() {
-                        notes.extend(corrections.iter().map(|(correction, _, _)| {
+                        notes.extend(reflections.corrections().iter().map(|(correction, _, _)| {
                             format!("proposed correction: {correction}")
                         }));
-                        trace.corrections.extend(corrections);
-                        trace.experiments.extend(experiments);
-                    } else if !corrections.is_empty() || !experiments.is_empty() {
+                        trace.reflections.extend(reflections);
+                    } else if !reflections.is_empty() {
                         integration.rejected.push(format!(
-                            "corrections or experiments proposed by {}, which is not reflective",
+                            "corrections, experiments or influences proposed by {}, which is not reflective",
                             descriptor.name()
                         ));
                     }
@@ -370,7 +496,44 @@ impl Intelligence {
 
         Self::assess(graph, &support, &achieved_plans, &mut invocations);
 
-        let impasses = ImpasseDiagnosis::diagnose(graph, &self.registry, &invocations);
+        let definite_answers = answers
+            .iter()
+            .filter(|answer| {
+                matches!(
+                    answer.status(),
+                    AnswerStatus::Proven | AnswerStatus::Refuted
+                )
+            })
+            .count();
+        let exposures: Vec<InfluenceExposure> = applicable
+            .iter()
+            .map(|influence| {
+                let id = influence.id();
+                let nodes = injected.get(&id).cloned().unwrap_or_default();
+                let decisive = invocations
+                    .iter()
+                    .filter(|invocation| invocation.selection().influences().contains(&id))
+                    .map(|invocation| (invocation.step(), invocation.outcome()))
+                    .collect();
+
+                InfluenceExposure::new(
+                    id,
+                    episode,
+                    configuration.activity(),
+                    nodes.len(),
+                    decisive,
+                    nodes.iter().any(|node| support.contains(node)),
+                    nodes
+                        .iter()
+                        .any(|node| graph.node(*node).is_some_and(|node| !node.is_valid())),
+                    definite_answers,
+                )
+            })
+            .collect();
+
+        let descriptors: Vec<&ModuleDescriptor> =
+            modules.iter().map(|module| module.descriptor()).collect();
+        let impasses = ImpasseDiagnosis::diagnose(graph, &descriptors, &invocations);
         let resource_states = access.meter().states();
         let total_usage = access.meter().usage();
         let (_, store) = access.into_parts();
@@ -386,9 +549,14 @@ impl Intelligence {
 
         // What the examination of the cognition concluded: corrections are
         // applied (journaled and reversible), experiments queued.
+        let (proposed_corrections, requested, proposed, examined) = trace.reflections.into_parts();
         let mut corrections = Vec::new();
 
-        for (correction, basis, justification) in trace.corrections {
+        for dream in examined {
+            memory.dreams_mut().examine(dream);
+        }
+
+        for (correction, basis, justification) in proposed_corrections {
             let description = correction.to_string();
 
             match MemoryCorrection::apply(memory, episode, correction, basis, justification) {
@@ -397,9 +565,28 @@ impl Intelligence {
             }
         }
 
+        let applied: Vec<String> = applicable
+            .iter()
+            .map(|influence| format!("{}: {}", influence.id(), influence.kind()))
+            .collect();
+
+        for exposure in exposures {
+            memory.influences_mut().expose(exposure);
+        }
+
+        let mut proposed_influences = Vec::new();
+
+        for influence in proposed {
+            let description = format!("{}", influence.kind());
+
+            if memory.influences_mut().propose(influence) {
+                proposed_influences.push(description);
+            }
+        }
+
         let mut experiments = Vec::new();
 
-        for request in trace.experiments {
+        for request in requested {
             if memory.dreams_mut().request(request.clone()) {
                 experiments.push(request);
             }
@@ -436,6 +623,7 @@ impl Intelligence {
             trace.exploitation,
         )
         .with_reflection(corrections, experiments)
+        .with_influences(applied, proposed_influences)
         .with_event(event.clone());
 
         routing_memory.learn(&record);
@@ -447,6 +635,21 @@ impl Intelligence {
             routing_memory.episodes_learned(),
             detailed.then_some(working),
         )
+    }
+
+    fn predicates(content: &Content) -> Vec<String> {
+        match content {
+            Content::Statement(statement) | Content::Need(statement) => {
+                vec![statement.predicate().to_owned()]
+            }
+            Content::Rule(rule) => rule
+                .premises()
+                .iter()
+                .chain([rule.conclusion()])
+                .map(|statement| statement.predicate().to_owned())
+                .collect(),
+            Content::Document(_) => Vec::new(),
+        }
     }
 
     /// Kinds of information the long-term memory can provide, with how
@@ -508,10 +711,18 @@ impl Intelligence {
         trace.plans.push(PlanRecord::new(plan, step));
     }
 
+    /// Contents an episode starts from. What the event shows is an
+    /// observation, unless the event is replayed: then it is a replay.
     fn initial_contents(
         &self,
         event: &Event,
+        live: bool,
     ) -> Vec<(Content, EpistemicKind, Producer, Option<Provenance>)> {
+        let perceived = if live {
+            EpistemicKind::Observation
+        } else {
+            EpistemicKind::Replay
+        };
         let resource = Producer::Resource(InitialResources::KNOWLEDGE_FILE.to_owned());
         let knowledge = self.resources.knowledge();
         let provenance = Provenance::new(
@@ -530,7 +741,7 @@ impl Intelligence {
             .chain(Perception::perceive(event).into_iter().map(|content| {
                 (
                     content,
-                    EpistemicKind::Observation,
+                    perceived,
                     Producer::Perception,
                     Some(provenance.clone()),
                 )
@@ -557,8 +768,10 @@ impl Intelligence {
 
     /// Modules having valid, unprocessed content they consume, with the
     /// features describing that content and the stake of acting on it.
+    #[allow(clippy::too_many_arguments)]
     fn candidates(
         &self,
+        modules: &[&dyn CognitiveModule],
         working: &WorkingMemory,
         seen: &[u64],
         previous: Option<&str>,
@@ -569,7 +782,7 @@ impl Intelligence {
         let mut candidates = Vec::new();
         let ready = active_plan.map(PlanRecord::ready_steps).unwrap_or_default();
 
-        for (index, module) in self.registry.modules().iter().enumerate() {
+        for (index, module) in modules.iter().enumerate() {
             let descriptor = module.descriptor();
             let mut features = BTreeSet::new();
             let mut stake: f64 = 0.0;

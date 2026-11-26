@@ -48,7 +48,7 @@ impl RoutingMemory {
         }
 
         for dream in dreams.dreams() {
-            if let Some(episode) = dream.episode() {
+            for episode in dream.scenes().iter().filter_map(|scene| scene.episode()) {
                 memory.learn_simulated(episode);
             }
         }
@@ -103,32 +103,18 @@ impl RoutingMemory {
     }
 
     /// Posterior success probability of a module in situations sharing a
-    /// feature: real outcomes count fully, simulated ones (from dreams)
-    /// with the given weight, on top of the prior.
+    /// feature, from real outcomes only. What dreams showed is no evidence
+    /// about reality: it acts through the influences the unconscious draws
+    /// from it, whose real consequences are learned in turn.
     pub(crate) fn estimate(
         &self,
         module: &str,
         feature: &str,
         prior: (f64, f64),
-        simulation_weight: f64,
     ) -> BetaDistribution {
         let real = self.statistic(module, feature);
-        let simulated = self.simulated_statistic(module, feature);
 
-        BetaDistribution::posterior(
-            prior.0 + simulation_weight * simulated.successes() as f64,
-            prior.1 + simulation_weight * simulated.failures() as f64,
-            real.successes(),
-            real.failures(),
-        )
-    }
-
-    pub(crate) fn simulated_statistic(&self, module: &str, feature: &str) -> RoutingStatistic {
-        self.simulated
-            .get(module)
-            .and_then(|statistics| statistics.get(feature))
-            .copied()
-            .unwrap_or_default()
+        BetaDistribution::posterior(prior.0, prior.1, real.successes(), real.failures())
     }
 
     fn learn_with(

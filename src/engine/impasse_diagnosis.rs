@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    cognition::module_registry::ModuleRegistry,
+    cognition::module_descriptor::ModuleDescriptor,
     memory::{
         impasse_kind::ImpasseKind, impasse_record::ImpasseRecord,
         invocation_record::InvocationRecord,
@@ -21,7 +21,7 @@ pub(crate) struct ImpasseDiagnosis;
 impl ImpasseDiagnosis {
     pub(crate) fn diagnose(
         graph: &ReasoningGraph,
-        registry: &ModuleRegistry,
+        descriptors: &[&ModuleDescriptor],
         invocations: &[InvocationRecord],
     ) -> Vec<ImpasseRecord> {
         let open: Vec<NodeId> = graph
@@ -58,10 +58,9 @@ impl ImpasseDiagnosis {
             } else {
                 let signature = pattern.signature();
 
-                let suppliers: Vec<&str> = registry
-                    .modules()
+                let suppliers: Vec<&str> = descriptors
                     .iter()
-                    .map(|module| module.descriptor())
+                    .copied()
                     .filter(|descriptor| {
                         descriptor.consumes(ContentKind::Need) && descriptor.declares(&signature)
                     })

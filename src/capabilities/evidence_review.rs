@@ -5,15 +5,14 @@ use crate::{
         cognitive_module::CognitiveModule, module_context::ModuleContext,
         module_descriptor::ModuleDescriptor, module_output::ModuleOutput, proposal::Proposal,
     },
+    influences::{influence::Influence, influence_kind::InfluenceKind},
     memory::{
         correction::Correction, correction_basis::CorrectionBasis,
-        hypothesis_status::HypothesisStatus, knowledge_memory::KnowledgeMemory,
-        knowledge_origin::KnowledgeOrigin, standing::Standing,
+        hypothesis_status::HypothesisStatus, knowledge_memory::KnowledgeMemory, standing::Standing,
     },
     reasoning::epistemic_kind::EpistemicKind,
     representation::{
-        bindings::Bindings, content::Content, content_kind::ContentKind, rule::Rule,
-        statement::Statement, term::Term,
+        content::Content, content_kind::ContentKind, statement::Statement, term::Term,
     },
 };
 
@@ -61,56 +60,6 @@ impl EvidenceReview {
             EpistemicKind::Computation,
             Vec::new(),
         ));
-    }
-
-    /// Facts satisfying every premise of the rule whose conclusion is
-    /// known to be false: a counterexample.
-    fn counterexample(knowledge: &KnowledgeMemory, rule: &Rule) -> Option<Vec<Statement>> {
-        let mut partial: Vec<(Bindings, Vec<Statement>)> = vec![(Bindings::default(), Vec::new())];
-        let mut explored = 0;
-
-        for premise in rule.premises() {
-            let mut next = Vec::new();
-
-            for (bindings, facts) in &partial {
-                let pattern = bindings.apply(premise);
-
-                for entry in knowledge.recall(&pattern) {
-                    explored += 1;
-
-                    if explored > Self::MAXIMUM_MATCHES {
-                        return None;
-                    }
-
-                    if let Some(extended) = bindings.unify(premise, entry.statement()) {
-                        let mut facts = facts.clone();
-
-                        facts.push(entry.statement().clone());
-                        next.push((extended, facts));
-                    }
-                }
-            }
-
-            partial = next;
-        }
-
-        partial.into_iter().find_map(|(bindings, mut facts)| {
-            let conclusion = bindings.apply(rule.conclusion());
-
-            if !conclusion.is_ground() {
-                return None;
-            }
-
-            let negation = conclusion.complement();
-
-            knowledge
-                .entry(&negation)
-                .filter(|entry| entry.standing().is_active())
-                .map(|_| {
-                    facts.push(negation);
-                    facts
-                })
-        })
     }
 
     /// Distinct observed scopes among the facts corroborating a hypothesis,
@@ -162,7 +111,12 @@ impl CognitiveModule for EvidenceReview {
                 continue;
             }
 
-            if let Some(facts) = Self::counterexample(knowledge, rule) {
+            if let Some(facts) = knowledge
+                .confront(rule, Self::MAXIMUM_MATCHES)
+                .1
+                .into_iter()
+                .next()
+            {
                 Self::concern(&mut output, "counterexample", rule.to_string());
                 output.correct(
                     Correction::RefuteHypothesis { rule: rule.clone() },
@@ -190,10 +144,6 @@ impl CognitiveModule for EvidenceReview {
                     "repeated_support",
                     format!("{rule}: {corroborations} corroborations from {independent} source"),
                 );
-            }
-
-            if record.origin() == KnowledgeOrigin::Dream && corroborations == 0 {
-                Self::concern(&mut output, "unverified_dream_hypothesis", rule.to_string());
             }
         }
 
@@ -236,6 +186,16 @@ impl CognitiveModule for EvidenceReview {
                         format!("{older} is the less recently supported side of a contradiction"),
                     );
                 }
+
+                // A doubt the conscious will meet when the situation concerns it.
+                output.influence(Influence::new(
+                    InfluenceKind::Doubt {
+                        statement: statement.clone(),
+                    },
+                    BTreeSet::new(),
+                    vec!["knowledge:contradiction".to_owned()],
+                    format!("{statement} and its negation were both believed"),
+                ));
 
                 if verifications < Self::MAXIMUM_VERIFICATIONS {
                     verifications += 1;

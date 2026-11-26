@@ -10,6 +10,9 @@ pub(crate) enum EpistemicKind {
     /// It stands for an observation inside the dream only: it is never a
     /// new, independent observation of the world.
     Replay,
+    /// Deliberately invented or transformed by the imagination during a
+    /// dream. Its provenance tells how; it never holds outside the dream.
+    Imagined,
     /// Provided by the initial resources.
     Premise,
     /// Recalled from the persistent knowledge memory.

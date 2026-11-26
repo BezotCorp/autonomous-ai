@@ -43,11 +43,16 @@ pub(crate) struct LearningStatistics {
     scope_changes: u64,
     acquisition_cache_entries: usize,
     acquisition_cache_bytes: usize,
-    dreams: BTreeMap<String, DreamStatistics>,
+    dreams: DreamStatistics,
     pending_experiments: usize,
     corrections_applied: BTreeMap<String, usize>,
     corrections_reverted: usize,
     activities: BTreeMap<String, (usize, usize, f64)>,
+    influences_active: usize,
+    influences_retired: usize,
+    influence_exposures: u64,
+    decisions_changed_by_influences: usize,
+    influence_attributions: BTreeMap<String, usize>,
 }
 
 impl LearningStatistics {
@@ -146,11 +151,7 @@ impl LearningStatistics {
         statistics.acquisition_cache_bytes = memory.acquisitions().bytes();
 
         for dream in memory.dreams().dreams() {
-            statistics
-                .dreams
-                .entry(format!("{:?}", dream.mode()))
-                .or_default()
-                .observe(dream);
+            statistics.dreams.observe(dream);
         }
 
         statistics.pending_experiments = memory.dreams().pending().len();
@@ -182,6 +183,30 @@ impl LearningStatistics {
                 entry.1 += 1;
             }
         }
+
+        let evidence = memory.influences().evidence();
+
+        for influence in memory.influences().influences() {
+            if influence.is_active() {
+                statistics.influences_active += 1;
+            } else {
+                statistics.influences_retired += 1;
+            }
+
+            let evidence = evidence.get(&influence.id()).copied().unwrap_or_default();
+
+            statistics.influence_exposures += evidence.exposures();
+            *statistics
+                .influence_attributions
+                .entry(evidence.attribution().to_owned())
+                .or_default() += 1;
+        }
+
+        statistics.decisions_changed_by_influences = memory
+            .real_episodes()
+            .flat_map(|episode| episode.invocations())
+            .filter(|invocation| !invocation.selection().influences().is_empty())
+            .count();
 
         let hypotheses = statistics.hypotheses_open + statistics.hypotheses_marked_refuted;
 
