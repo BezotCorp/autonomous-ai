@@ -14,8 +14,8 @@ use crate::{
 
 /// Exact mathematics over numbers, versions and expressions.
 ///
-/// It answers needs about the fundamental relations of order and equality
-/// and about the elementary operations, producing either the statement or
+/// It answers needs about the fundamental relations of order and equality,
+/// the elementary operations and the components of versions, producing either the statement or
 /// its explicit negation. It also evaluates the expressions appearing in
 /// statements (`value(expression, number)`).
 pub(crate) struct MathematicalReasoning {
@@ -53,6 +53,9 @@ impl MathematicalReasoning {
                 "product/3",
                 "quotient/3",
                 "value/2",
+                "version_major/2",
+                "version_minor/2",
+                "version_patch/2",
             ])
             .producing(&[EpistemicKind::Computation]),
         }
@@ -144,6 +147,26 @@ impl MathematicalReasoning {
                 known if Self::compare(known, &value) == Some(Ordering::Equal) => {
                     Statement::new(predicate, arguments.to_vec())
                 }
+                _ => Statement::negative(predicate, arguments.to_vec()),
+            });
+        }
+
+        if let Some(component) = predicate.strip_prefix("version_") {
+            let [Term::Version(version), _] = arguments else {
+                return Err(format!("{pattern}: a known version is expected"));
+            };
+
+            let value = match component {
+                "major" => version.major,
+                "minor" => version.minor,
+                _ => version.patch,
+            };
+
+            let value = Term::Number(Rational::integer(i128::from(value)));
+
+            return Ok(match &arguments[1] {
+                Term::Variable(_) => Statement::new(predicate, vec![arguments[0].clone(), value]),
+                known if known == &value => Statement::new(predicate, arguments.to_vec()),
                 _ => Statement::negative(predicate, arguments.to_vec()),
             });
         }
@@ -240,6 +263,14 @@ mod tests {
         );
         assert_eq!(answer("sum(2, 3/2, ?x)"), "sum(2, 3/2, 7/2)");
         assert_eq!(answer("product(2, 3, 7)"), "not product(2, 3, 7)");
+        assert_eq!(
+            answer("version_minor(v0.14.5, ?m)"),
+            "version_minor(v0.14.5, 14)"
+        );
+        assert_eq!(
+            answer("version_major(v1.0.0, 0)"),
+            "not version_major(v1.0.0, 0)"
+        );
         assert!(MathematicalReasoning::answer(&"less_than(v1.0.0, 3)".parse().unwrap()).is_err());
     }
 }
