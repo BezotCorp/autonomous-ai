@@ -6,10 +6,9 @@ use crate::{
     consumables::resource_state::ResourceState,
     influences::influence_memory::InfluenceMemory,
     memory::{
-        acquisition_cache::AcquisitionCache, activity::Activity, activity_log::ActivityLog,
-        correction_journal::CorrectionJournal, dream_memory::DreamMemory,
-        experience_memory::ExperienceMemory, knowledge_memory::KnowledgeMemory,
-        routing_memory::RoutingMemory,
+        acquisition_cache::AcquisitionCache, correction_journal::CorrectionJournal,
+        dream_memory::DreamMemory, experience_memory::ExperienceMemory,
+        knowledge_memory::KnowledgeMemory, routing_memory::RoutingMemory,
     },
 };
 
@@ -18,10 +17,8 @@ use crate::{
 /// beside them are kept the last known state of the consumable resources,
 /// the technical store (and record) of acquired data, the dreams, the
 /// journal of corrections made by the examination of the cognition, and
-/// the activities undertaken on the intelligence's own initiative.
-///
-/// Concurrent activities never share it: the store locks the file for the
-/// whole duration of an activity.
+/// the influences of the unconscious. It is the cognitive part of an
+/// existence (see `Existence`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct PersistentMemory {
     knowledge: KnowledgeMemory,
@@ -31,7 +28,6 @@ pub(crate) struct PersistentMemory {
     acquisitions: AcquisitionCache,
     dreams: DreamMemory,
     corrections: CorrectionJournal,
-    activities: ActivityLog,
     influences: InfluenceMemory,
 }
 
@@ -68,14 +64,6 @@ impl PersistentMemory {
         &mut self.influences
     }
 
-    pub(crate) fn activities(&self) -> &ActivityLog {
-        &self.activities
-    }
-
-    pub(crate) fn activities_mut(&mut self) -> &mut ActivityLog {
-        &mut self.activities
-    }
-
     /// Isolated reconstruction of the cognitive state at an earlier
     /// instant: knowledge as it stood then, learning from the experiences
     /// lived until then, and the record of data acquired so far (which
@@ -94,19 +82,18 @@ impl PersistentMemory {
             acquisitions: self.acquisitions.clone(),
             dreams: DreamMemory::default(),
             corrections: CorrectionJournal::default(),
-            activities: ActivityLog::default(),
             influences: InfluenceMemory::default(),
         }
     }
 
-    /// Experiences of real activities (action and reflection).
+    /// Experiences of real activities (not imagined ones).
     pub(crate) fn real_episodes(
         &self,
     ) -> impl Iterator<Item = &crate::memory::episode_record::EpisodeRecord> {
         self.experiences
             .episodes()
             .iter()
-            .filter(|episode| episode.activity() != Activity::Dream)
+            .filter(|episode| !episode.activity().is_imaginary())
     }
 
     pub(crate) fn resources_mut(&mut self) -> &mut BTreeMap<String, ResourceState> {

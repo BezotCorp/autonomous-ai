@@ -47,7 +47,6 @@ pub(crate) struct LearningStatistics {
     pending_experiments: usize,
     corrections_applied: BTreeMap<String, usize>,
     corrections_reverted: usize,
-    activities: BTreeMap<String, (usize, usize, f64)>,
     influences_active: usize,
     influences_retired: usize,
     influence_exposures: u64,
@@ -167,20 +166,6 @@ impl LearningStatistics {
 
             if !record.is_active() {
                 statistics.corrections_reverted += 1;
-            }
-        }
-
-        for record in memory.activities().records() {
-            let entry = statistics
-                .activities
-                .entry(record.focus().to_owned())
-                .or_default();
-
-            entry.0 += 1;
-            entry.2 += record.seconds();
-
-            if record.worthwhile() {
-                entry.1 += 1;
             }
         }
 

@@ -4,7 +4,7 @@ use chrono::Duration;
 
 use crate::{
     acquisition::access_mode::AccessMode,
-    engine::intelligence::Intelligence,
+    engine::{disposition::Disposition, intelligence::Intelligence},
     memory::{
         activity::Activity, dream_mode::DreamMode, dream_record::DreamRecord,
         dream_scene::DreamScene, dream_variant::DreamVariant, dream_verdict::DreamVerdict,
@@ -35,6 +35,7 @@ impl Dreaming {
         variant: Option<DreamVariant>,
         seed: u64,
         transition: String,
+        disposition: &mut dyn Disposition,
     ) -> DreamScene {
         let mechanisms = vec![match mode {
             DreamMode::Historical => "replay".to_owned(),
@@ -80,7 +81,7 @@ impl Dreaming {
         }
 
         let clock = Instant::now();
-        let report = intelligence.reason(event, sandbox, configuration, false);
+        let report = intelligence.reason_with(event, sandbox, configuration, false, disposition);
         let episode = report.episode().clone();
         let before = OutcomeDigest::of(original);
         let after = OutcomeDigest::of(&episode);

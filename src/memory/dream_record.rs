@@ -2,9 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{memory::dream_scene::DreamScene, representation::rule::Rule};
+use crate::{
+    memory::{activity::Activity, dream_scene::DreamScene},
+    representation::{rule::Rule, statement::Statement},
+};
 
-/// One dream: why it began (a requested experiment, or nothing in
+/// One unfolding of the imagination (a dream, a reverie or a directed
+/// simulation): why it began (a requested experiment, or nothing in
 /// particular), its successive scenes, the conjectures that arose in it,
 /// and what it actually cost. Every dream is kept, whatever it produced;
 /// only the detailed traces of old dreams are dropped. Nothing in it is a
@@ -12,6 +16,8 @@ use crate::{memory::dream_scene::DreamScene, representation::rule::Rule};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct DreamRecord {
     id: Uuid,
+    activity: Activity,
+    focus: Option<Statement>,
     started_at: DateTime<Utc>,
     reason: String,
     scenes: Vec<DreamScene>,
@@ -20,7 +26,10 @@ pub(crate) struct DreamRecord {
 }
 
 impl DreamRecord {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        activity: Activity,
+        focus: Option<Statement>,
         started_at: DateTime<Utc>,
         reason: String,
         scenes: Vec<DreamScene>,
@@ -29,6 +38,8 @@ impl DreamRecord {
     ) -> Self {
         Self {
             id: Uuid::now_v7(),
+            activity,
+            focus,
             started_at,
             reason,
             scenes,
@@ -41,8 +52,8 @@ impl DreamRecord {
         self.id
     }
 
-    pub(crate) fn started_at(&self) -> DateTime<Utc> {
-        self.started_at
+    pub(crate) fn activity(&self) -> Activity {
+        self.activity
     }
 
     pub(crate) fn reason(&self) -> &str {

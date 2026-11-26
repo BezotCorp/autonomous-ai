@@ -56,7 +56,7 @@ impl InfluenceExposure {
     }
 
     pub(crate) fn is_real(&self) -> bool {
-        self.activity != Activity::Dream
+        !self.activity.is_imaginary()
     }
 
     pub(crate) fn decisive(&self) -> &[(usize, InvocationOutcome)] {

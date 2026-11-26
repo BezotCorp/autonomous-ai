@@ -1,0 +1,23 @@
+// Trustfall queries run against rustdoc JSON (docs.rs) by the
+// documentation_observation module. `$symbols` receives the symbols sought.
+[
+        (
+            name: "symbol_documentation",
+            expression: r#"
+                {
+                    Crate {
+                        item {
+                            name @filter(
+                                op: "one_of",
+                                value: ["$symbols"]
+                            )
+                            symbol: name @output
+                            kind: __typename @output
+                            documentation: docs @output
+                            visibility: visibility_limit @output
+                        }
+                    }
+                }
+            "#,
+        ),
+    ]

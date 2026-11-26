@@ -24,6 +24,19 @@ impl BetaDistribution {
         }
     }
 
+    /// The same distribution at a temperature: `Beta(α/T, β/T)` keeps the
+    /// mean and widens (T > 1) or narrows (T < 1) the uncertainty.
+    pub(crate) fn tempered(&self, temperature: f64) -> Self {
+        if temperature == 1.0 || !(temperature.is_finite() && temperature > 0.0) {
+            return *self;
+        }
+
+        Self {
+            alpha: (self.alpha / temperature).max(1e-3),
+            beta: (self.beta / temperature).max(1e-3),
+        }
+    }
+
     pub(crate) fn mean(&self) -> f64 {
         self.alpha / (self.alpha + self.beta)
     }

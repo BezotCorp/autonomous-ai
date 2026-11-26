@@ -1,0 +1,8 @@
+// Lexicon used by linguistic_analysis. Entries follow Universal
+// Dependencies conventions for categories and features. It is meant to be
+// generated from external resources (see TODO: WordNet, Wiktionary, UD);
+// it is intentionally empty until such an importer exists.
+(
+    sources: [],
+    entries: [],
+)

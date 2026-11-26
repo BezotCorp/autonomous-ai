@@ -1,0 +1,28 @@
+// Initial knowledge, written in the textual notation:
+//   statement: [not] predicate(term, ...)
+//   rule:      conclusion :- premise, premise, ...
+// Terms: ?variable, "text", 42, 3/4, 0.5, v1.2.3, [expression], symbol.
+//
+// Only general knowledge belongs here: definitions of concepts and
+// documented conventions. Conclusions about particular situations must be
+// built by the intelligence itself.
+(
+    statements: [
+        // Order relations are transitive (law of order, used by relational analysis).
+        "relation_property(less_than, transitive)",
+        "relation_property(greater_than, transitive)",
+        "inverse_relation(less_than, greater_than)",
+        "inverse_relation(greater_than, less_than)",
+    ],
+    rules: [
+        // A dependency is outdated when a repository locks a version of a
+        // package older than a version published on the same source.
+        "outdated_dependency(?repository, ?package, ?locked, ?published) :- package_published(?package, ?published, ?source), locked_package(?repository, ?lockfile, ?package, ?locked, ?source), less_than(?locked, ?published)",
+
+        // Semantic Versioning 2.0.0, items 4 and 8: from 1.0.0 on, versions
+        // sharing the major number are declared compatible; below 1.0.0
+        // Cargo treats versions sharing the minor number as compatible.
+        "semver_compatible(?old, ?new) :- version_major(?old, ?major), version_major(?new, ?major), greater_than(?major, 0)",
+        "semver_compatible(?old, ?new) :- version_major(?old, 0), version_major(?new, 0), version_minor(?old, ?minor), version_minor(?new, ?minor)",
+    ],
+)

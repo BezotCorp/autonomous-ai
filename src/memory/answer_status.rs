@@ -12,3 +12,14 @@ pub(crate) enum AnswerStatus {
     /// No valid result answers the question: absence of proof only.
     Undetermined,
 }
+
+impl AnswerStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Proven => "proven",
+            Self::Refuted => "refuted",
+            Self::Contradictory => "contradictory",
+            Self::Undetermined => "undetermined",
+        }
+    }
+}

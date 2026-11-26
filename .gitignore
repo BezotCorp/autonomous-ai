@@ -2,3 +2,7 @@
 /node_modules/
 
 /.autonomous-ai/
+
+# Generated data: individual existences and experiment outputs.
+/data/individuals/
+/data/experiments/

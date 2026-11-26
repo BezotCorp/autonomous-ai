@@ -1,7 +1,5 @@
 pub(crate) mod acquisition_cache;
 pub(crate) mod activity;
-pub(crate) mod activity_log;
-pub(crate) mod activity_record;
 pub(crate) mod answer_record;
 pub(crate) mod answer_status;
 pub(crate) mod cached_response;
@@ -38,7 +36,6 @@ pub(crate) mod knowledge_entry;
 pub(crate) mod knowledge_exploitation;
 pub(crate) mod knowledge_memory;
 pub(crate) mod learning_statistics;
-pub(crate) mod memory_store;
 pub(crate) mod module_statistics;
 pub(crate) mod moving_average;
 pub(crate) mod outcome_digest;

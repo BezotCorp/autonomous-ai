@@ -18,15 +18,16 @@ use crate::{
     consumables::resource_meter::ResourceMeter,
     engine::{
         belief_revision::BeliefRevision, candidate::Candidate, consolidation::Consolidation,
-        episode_report::EpisodeReport, impasse_diagnosis::ImpasseDiagnosis,
-        learning_parameters::LearningParameters, memory_correction::MemoryCorrection,
-        module_selector::ModuleSelector, perception::Perception,
-        question_answering::QuestionAnswering,
+        disposition::Disposition, episode_report::EpisodeReport,
+        impasse_diagnosis::ImpasseDiagnosis, learning_parameters::LearningParameters,
+        memory_correction::MemoryCorrection, module_selector::ModuleSelector,
+        perception::Perception, question_answering::QuestionAnswering,
     },
     events::event::Event,
     influences::{
         influence::Influence, influence_exposure::InfluenceExposure, influence_kind::InfluenceKind,
     },
+    latent::occurrence::Occurrence,
     mathematics::beta_distribution::BetaDistribution,
     mathematics::random_source::RandomSource,
     memory::{
@@ -105,6 +106,8 @@ impl Intelligence {
             .map(|module| module.descriptor())
     }
 
+    /// Reasons without any internal state (laboratory condition).
+    #[cfg(test)]
     pub(crate) fn reason(
         &self,
         event: &Event,
@@ -112,10 +115,31 @@ impl Intelligence {
         configuration: EpisodeConfiguration,
         detailed: bool,
     ) -> EpisodeReport {
+        self.reason_with(
+            event,
+            memory,
+            configuration,
+            detailed,
+            &mut crate::engine::neutral_disposition::NeutralDisposition,
+        )
+    }
+
+    /// Reasons under the modulation of an internal state, which every
+    /// occurrence of the episode is reported to as it happens.
+    pub(crate) fn reason_with(
+        &self,
+        event: &Event,
+        memory: &mut PersistentMemory,
+        configuration: EpisodeConfiguration,
+        detailed: bool,
+        disposition: &mut dyn Disposition,
+    ) -> EpisodeReport {
         let episode = Uuid::now_v7();
         let started_at = Utc::now();
         let clock = Instant::now();
-        let configuration = configuration.with_parameters(&self.parameters);
+        let configuration = configuration
+            .with_parameters(&self.parameters)
+            .modulated(disposition.modulation());
         let mut random = RandomSource::new(configuration.seed());
         let mut working = WorkingMemory::new(event.questions().to_vec());
         let mut trace = EpisodeTrace::default();
@@ -209,6 +233,30 @@ impl Intelligence {
                     Self::revise(&mut working, insertion.contradictions(), 0, &mut trace);
                 }
                 Err(error) => initial_errors.push(format!("{}: {error}", element.content())),
+            }
+        }
+
+        // What introspection perceives of the individual itself: observations
+        // of the self, each aspect a scope that newer perceptions supersede.
+        let (self_observations, self_revision) = configuration.self_observations();
+
+        for (statement, scope) in self_observations {
+            match working.graph_mut().insert(
+                Content::Statement(statement.clone()),
+                EpistemicKind::Observation,
+                Producer::Perception,
+                Vec::new(),
+                Some(Provenance::new(
+                    "introspection",
+                    Some(scope.clone()),
+                    self_revision.map(str::to_owned),
+                )),
+                0,
+            ) {
+                Ok(insertion) => {
+                    Self::revise(&mut working, insertion.contradictions(), 0, &mut trace);
+                }
+                Err(error) => initial_errors.push(format!("{statement}: {error}")),
             }
         }
 
@@ -323,12 +371,26 @@ impl Intelligence {
                 break Termination::QuestionsAnswered;
             }
 
-            if invocations.len()
-                >= configuration
-                    .maximum_invocations()
-                    .unwrap_or(self.parameters.maximum_invocations())
-            {
+            let modulation = disposition.modulation();
+            let budget = configuration
+                .maximum_invocations()
+                .unwrap_or(self.parameters.maximum_invocations());
+            let budget = if modulation.invocation_factor() == 1.0 {
+                budget
+            } else {
+                ((budget as f64 * modulation.invocation_factor()).round() as usize).max(1)
+            };
+
+            if invocations.len() >= budget {
                 break Termination::InvocationBudgetExhausted;
+            }
+
+            // The reasoner may give up at any step, as its state disposes it.
+            if !invocations.is_empty()
+                && modulation.abandonment() > 0.0
+                && random.uniform() < modulation.abandonment()
+            {
+                break Termination::Abandoned;
             }
 
             if clock.elapsed() >= self.parameters.maximum_duration() {
@@ -347,9 +409,13 @@ impl Intelligence {
 
             candidates.retain(|candidate| !configuration.excludes(candidate.name()));
 
-            let Some((position, selection)) =
-                selector.select(&candidates, access.meter(), &mut random, &preferences)
-            else {
+            let Some((position, selection)) = selector.select(
+                &candidates,
+                access.meter(),
+                &mut random,
+                &preferences,
+                &modulation,
+            ) else {
                 break Termination::Quiescent;
             };
 
@@ -368,6 +434,7 @@ impl Intelligence {
             let usage_before = access.meter().usage();
             let available_before = access.meter().availabilities();
 
+            let revisions_before = trace.revisions.len();
             let started = Instant::now();
             let result = module.apply(&ModuleContext::new(
                 working.graph(),
@@ -456,10 +523,21 @@ impl Intelligence {
                 None => {}
             }
 
+            Self::feel_invocation(
+                disposition,
+                &record,
+                &usage,
+                trace.revisions.len() - revisions_before,
+            );
             record.account(usage, actual_cost);
             invocations.push(record);
             previous = Some(descriptor.name().to_owned());
         };
+
+        disposition.feel(Occurrence::plain(format!(
+            "termination:{}",
+            termination.label()
+        )));
 
         let mut notes_from_corrections = Vec::new();
         let graph = working.graph();
@@ -495,6 +573,13 @@ impl Intelligence {
         }
 
         Self::assess(graph, &support, &achieved_plans, &mut invocations);
+
+        for answer in &answers {
+            disposition.feel(Occurrence::plain(format!(
+                "answer:{}",
+                answer.status().label()
+            )));
+        }
 
         let definite_answers = answers
             .iter()
@@ -635,6 +720,56 @@ impl Intelligence {
             routing_memory.episodes_learned(),
             detailed.then_some(working),
         )
+    }
+
+    /// Reports what one invocation did: the action, what it produced or
+    /// failed to, what it consumed or was refused, the revisions it caused
+    /// and the influences that decided it.
+    fn feel_invocation(
+        disposition: &mut dyn Disposition,
+        record: &InvocationRecord,
+        usage: &crate::consumables::resource_usage::ResourceUsage,
+        revisions: usize,
+    ) {
+        let module = record.module();
+
+        disposition.feel(Occurrence::plain(format!("invoke:{module}")));
+
+        if record.error().is_some() {
+            disposition.feel(Occurrence::plain(format!("error:{module}")));
+        } else if record.produced().is_empty() {
+            disposition.feel(Occurrence::plain(format!("barren:{module}")));
+        } else {
+            disposition.feel(Occurrence::new(
+                format!("produce:{module}"),
+                (1.0 + record.produced().len() as f64).ln(),
+            ));
+        }
+
+        for (resource, units) in usage.consumption() {
+            disposition.feel(Occurrence::new(
+                format!("consume:{resource}"),
+                (1.0 + units.max(0.0)).ln(),
+            ));
+        }
+
+        if usage.refused() > 0 {
+            disposition.feel(Occurrence::new(
+                "refused:resource",
+                (1.0 + usage.refused() as f64).ln(),
+            ));
+        }
+
+        if !record.selection().influences().is_empty() {
+            disposition.feel(Occurrence::plain("influenced:decision"));
+        }
+
+        if revisions > 0 {
+            disposition.feel(Occurrence::new(
+                "revision:belief",
+                (1.0 + revisions as f64).ln(),
+            ));
+        }
     }
 
     fn predicates(content: &Content) -> Vec<String> {

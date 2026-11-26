@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     acquisition::access_mode::AccessMode,
-    engine::learning_parameters::LearningParameters,
+    engine::{learning_parameters::LearningParameters, modulation::Modulation},
     memory::{
         activity::Activity, imagined_capability_spec::ImaginedCapabilitySpec,
         imagined_element::ImaginedElement,
@@ -30,6 +30,9 @@ pub(crate) struct EpisodeConfiguration {
     maximum_invocations: Option<usize>,
     imagined_elements: Vec<ImaginedElement>,
     imagined_capabilities: Vec<ImaginedCapabilitySpec>,
+    self_observations: Vec<(crate::representation::statement::Statement, String)>,
+    revision: Option<String>,
+    modulation: Modulation,
 }
 
 impl EpisodeConfiguration {
@@ -51,7 +54,39 @@ impl EpisodeConfiguration {
             maximum_invocations: None,
             imagined_elements: Vec::new(),
             imagined_capabilities: Vec::new(),
+            self_observations: Vec::new(),
+            revision: None,
+            modulation: Modulation::neutral(),
         }
+    }
+
+    /// What introspection perceives of the individual itself, each
+    /// statement with the aspect of the self it describes (its scope), at
+    /// a revision of the self (so that a newer perception supersedes an
+    /// older one in memory).
+    pub(crate) fn perceiving_self(
+        mut self,
+        observations: Vec<(crate::representation::statement::Statement, String)>,
+        revision: String,
+    ) -> Self {
+        self.self_observations = observations;
+        self.revision = Some(revision);
+        self
+    }
+
+    pub(crate) fn self_observations(
+        &self,
+    ) -> (
+        &[(crate::representation::statement::Statement, String)],
+        Option<&str>,
+    ) {
+        (&self.self_observations, self.revision.as_deref())
+    }
+
+    /// Records the modulation the episode started with.
+    pub(crate) fn modulated(mut self, modulation: Modulation) -> Self {
+        self.modulation = modulation;
+        self
     }
 
     /// Records the decision parameters the episode ran with.

@@ -1,8 +1,8 @@
-pub(crate) mod autonomy;
 pub(crate) mod belief_revision;
 pub(crate) mod candidate;
 pub(crate) mod consolidation;
 pub(crate) mod consolidation_summary;
+pub(crate) mod disposition;
 pub(crate) mod dreaming;
 pub(crate) mod episode_report;
 pub(crate) mod imagination;
@@ -10,6 +10,8 @@ pub(crate) mod impasse_diagnosis;
 pub(crate) mod intelligence;
 pub(crate) mod learning_parameters;
 pub(crate) mod memory_correction;
+pub(crate) mod modulation;
 pub(crate) mod module_selector;
+pub(crate) mod neutral_disposition;
 pub(crate) mod perception;
 pub(crate) mod question_answering;

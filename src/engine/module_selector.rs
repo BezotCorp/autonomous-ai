@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::{
     consumables::resource_meter::ResourceMeter,
-    engine::{candidate::Candidate, learning_parameters::LearningParameters},
+    engine::{
+        candidate::Candidate, learning_parameters::LearningParameters, modulation::Modulation,
+    },
     mathematics::{beta_distribution::BetaDistribution, random_source::RandomSource},
     memory::{
         candidate_evaluation::CandidateEvaluation, routing_memory::RoutingMemory,
@@ -46,16 +48,21 @@ impl<'a> ModuleSelector<'a> {
     /// questions it may lower it: an alternative thus gets a real chance,
     /// without ever being imposed. The choice that would have been made
     /// without them is computed as well, to know which ones were decisive.
+    ///
+    /// The modulation of the moment sets the temperature of the sampled
+    /// posteriors, the weight of costs and the chance that each influence
+    /// is admitted at all.
     pub(crate) fn select(
         &self,
         candidates: &[Candidate],
         meter: &ResourceMeter,
         random: &mut RandomSource,
         preferences: &BTreeMap<String, Vec<(Uuid, bool, BetaDistribution)>>,
+        modulation: &Modulation,
     ) -> Option<(usize, SelectionRecord)> {
         let evaluations: Vec<CandidateEvaluation> = candidates
             .iter()
-            .map(|candidate| self.evaluate(candidate, meter, random))
+            .map(|candidate| self.evaluate(candidate, meter, random, modulation))
             .collect();
 
         let mut influenced = Vec::with_capacity(candidates.len());
@@ -67,6 +74,10 @@ impl<'a> ModuleSelector<'a> {
             for (influence, favour, posterior) in
                 preferences.get(candidate.name()).into_iter().flatten()
             {
+                if modulation.admission() < 1.0 && random.uniform() >= modulation.admission() {
+                    continue;
+                }
+
                 let suggested = candidate.stake() * posterior.sample(random) - evaluation.cost();
 
                 if (*favour && suggested > utility) || (!*favour && suggested < utility) {
@@ -134,6 +145,7 @@ impl<'a> ModuleSelector<'a> {
         candidate: &Candidate,
         meter: &ResourceMeter,
         random: &mut RandomSource,
+        modulation: &Modulation,
     ) -> CandidateEvaluation {
         let posteriors: Vec<BetaDistribution> = candidate
             .features()
@@ -164,7 +176,9 @@ impl<'a> ModuleSelector<'a> {
         // would divide the uncertainty by the number of features and starve
         // never-tried alternatives of any chance.
         let drawn = ((random.uniform() * count) as usize).min(posteriors.len() - 1);
-        let sampled = posteriors[drawn].sample(random);
+        let sampled = posteriors[drawn]
+            .tempered(modulation.temperature())
+            .sample(random);
 
         let seconds = self
             .routing
@@ -173,12 +187,13 @@ impl<'a> ModuleSelector<'a> {
             .unwrap_or(0.0);
         let consumption = self.routing.expected_consumption(candidate.name());
         let scarcity = meter.scarcity_cost(&consumption);
-        let cost = self.parameters.cost_weight_per_second() * seconds
-            + if scarcity.is_finite() {
-                self.parameters.scarcity_weight() * scarcity
-            } else {
-                f64::INFINITY
-            };
+        let cost = modulation.cost_factor()
+            * (self.parameters.cost_weight_per_second() * seconds
+                + if scarcity.is_finite() {
+                    self.parameters.scarcity_weight() * scarcity
+                } else {
+                    f64::INFINITY
+                });
 
         CandidateEvaluation::new(
             candidate.stake(),

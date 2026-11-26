@@ -14,4 +14,21 @@ pub(crate) enum Termination {
     ResourcesExhausted,
     InvocationBudgetExhausted,
     TimeBudgetExhausted,
+    /// The reasoner gave up, under the modulation of its internal state,
+    /// while the reasoning could have gone on.
+    Abandoned,
+}
+
+impl Termination {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::QuestionsAnswered => "questions_answered",
+            Self::Quiescent => "quiescent",
+            Self::NothingWorthTrying => "nothing_worth_trying",
+            Self::ResourcesExhausted => "resources_exhausted",
+            Self::InvocationBudgetExhausted => "invocation_budget_exhausted",
+            Self::TimeBudgetExhausted => "time_budget_exhausted",
+            Self::Abandoned => "abandoned",
+        }
+    }
 }
