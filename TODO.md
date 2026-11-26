@@ -117,14 +117,32 @@ Après l'expérience de 47 épisodes (47/47 prouvées, quota GitHub épuisé) :
   `AUTONOMOUS_AI_TEST_EVENTS` (généralisation).
 - [x] Format mémoire v4.
 
+### Imagination, influences et exploration (commit 0e28dae)
+
+Voir `docs/cognitive-activities.md` (décisions, garanties, limites,
+résultats). En bref :
+- [x] Rêve = suite de scènes non linéaire (imagination : rappel, association,
+  transformation, invention, capacité imaginée simulée, anticipation,
+  contrainte, représentation de soi ; transitions et interruptions), genre
+  `Imagined`, provenance, isolation ; tous les rêves conservés.
+- [x] Suppression de la pondération 0,5 : le simulé n'est jamais une preuve.
+- [x] Influences de l'inconscient sur le conscient (`influences/`) : contenus
+  réfutables, préférences tirées de leur propre bilan, décisivité mesurée par
+  le choix contrefactuel, corrélation / contribution / démonstration, retrait
+  réversible ; `run --without-influences`, configuration N du script.
+- [x] Exploration : mélange des caractéristiques au lieu de la moyenne des
+  tirages (cause de la capacité jamais essayée).
+- [x] Attribution corrigée sur évidence d'ablation accumulée.
+- [x] `dream_interpretation` : confrontation des rêves au réel (confirmations
+  indépendantes du rêve exigées).
+
 ### Prochaines étapes identifiées
 
-0. Inconscient/rêve : règles métacognitives déclaratives (ressources) au lieu
-   de seuils codés dans les analyses ; validation statistique des corrections
-   d'attribution sur plusieurs rêves ; rejeu conditionnel exact des données
-   modifiables obtenues par GraphQL groupé ; exploration du bandit (moyenne
-   des postérieurs peu exploratrice, constatée en test).
-
+0. Imagination/inconscient : apprendre le choix des mécanismes d'imagination
+   et la valeur différée des rêves (via le bilan des influences qui en
+   dérivent) ; critères métacognitifs déclaratifs ; contexte des influences
+   plus fin que les prédicats partagés ; expériences multi-problèmes pour
+   évaluer réellement l'apport des activités (aucun gain démontré à ce jour).
 1. Négation existentielle (« aucune instance de… ») pour qu'une acquisition
    exhaustive (lockfile complet, documentation complète) prouve une absence
    sur un motif non clos.
