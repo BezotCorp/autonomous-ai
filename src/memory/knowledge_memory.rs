@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     memory::{
-        evidence::Evidence, hypothesis_record::HypothesisRecord,
-        hypothesis_status::HypothesisStatus, knowledge_entry::KnowledgeEntry, standing::Standing,
+        change_prior::ChangePrior, evidence::Evidence, hypothesis_record::HypothesisRecord,
+        hypothesis_status::HypothesisStatus, knowledge_entry::KnowledgeEntry,
+        scope_history::ScopeHistory, standing::Standing,
     },
     representation::{
         bindings::Bindings, provenance::Provenance, rule::Rule, statement::Statement,
@@ -16,13 +18,132 @@ use crate::{
 /// Declarative knowledge acquired across reasoning episodes. Initial
 /// resources are kept outside of it: this memory only contains what the
 /// intelligence observed, derived or conjectured by itself.
+///
+/// What was observed is dated: the memory keeps, for every observed scope
+/// of a source, when it was last verified and how often it changed, so
+/// that a recollection is never mistaken for a verification of the
+/// present state.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub(crate) struct KnowledgeMemory {
     facts: BTreeMap<Statement, KnowledgeEntry>,
     hypotheses: BTreeMap<Rule, HypothesisRecord>,
+    scopes: BTreeMap<(String, String), ScopeHistory>,
 }
 
 impl KnowledgeMemory {
+    /// Depth up to which the staleness of derived knowledge is traced back
+    /// to the observations it rests on.
+    const MAXIMUM_DERIVATION_DEPTH: usize = 6;
+
+    /// Records that a scope of a source was observed at a revision.
+    /// Returns whether the revision changed since the previous observation.
+    pub(crate) fn verify_scope(
+        &mut self,
+        source: &str,
+        scope: &str,
+        revision: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> bool {
+        match self.scopes.get_mut(&(source.to_owned(), scope.to_owned())) {
+            Some(history) => history.verify(revision, at),
+            None => {
+                self.scopes.insert(
+                    (source.to_owned(), scope.to_owned()),
+                    ScopeHistory::new(revision.map(str::to_owned), at),
+                );
+                false
+            }
+        }
+    }
+
+    pub(crate) fn scopes(&self) -> impl Iterator<Item = (&(String, String), &ScopeHistory)> {
+        self.scopes.iter()
+    }
+
+    /// Provenance under which an entry would be recalled now, dated by the
+    /// last verification of its scope, and the probability that it no
+    /// longer holds. Content without an observed scope (events, initial
+    /// resources) records something that happened and does not expire;
+    /// derived content is as outdated as the observations it rests on.
+    pub(crate) fn currency(
+        &self,
+        entry: &KnowledgeEntry,
+        now: DateTime<Utc>,
+        prior: ChangePrior,
+    ) -> (Option<Provenance>, f64) {
+        self.currency_at_depth(entry, now, prior, 0)
+    }
+
+    fn currency_at_depth(
+        &self,
+        entry: &KnowledgeEntry,
+        now: DateTime<Utc>,
+        prior: ChangePrior,
+        depth: usize,
+    ) -> (Option<Provenance>, f64) {
+        let mut best: Option<(Option<Provenance>, f64)> = None;
+
+        for evidence in entry.evidence() {
+            let candidate = match evidence.provenance() {
+                Some(provenance) => match provenance.scope() {
+                    None => (Some(provenance.clone()), 0.0),
+                    Some(scope) => {
+                        match self
+                            .scopes
+                            .get(&(provenance.source().to_owned(), scope.to_owned()))
+                        {
+                            Some(history)
+                                if provenance.revision().is_none()
+                                    || provenance.revision() == history.revision() =>
+                            {
+                                (
+                                    Some(
+                                        provenance.clone().confirmed_at(history.last_verified_at()),
+                                    ),
+                                    history.staleness(now, prior.changes(), prior.seconds()),
+                                )
+                            }
+                            // Observed in a revision the scope has left since.
+                            Some(_) => (Some(provenance.clone()), 1.0),
+                            None => (
+                                Some(provenance.clone()),
+                                1.0 - (-prior.changes() / prior.seconds().max(1e-9)
+                                    * (now - provenance.acquired_at()).num_seconds().max(0) as f64)
+                                    .exp(),
+                            ),
+                        }
+                    }
+                },
+                None if depth >= Self::MAXIMUM_DERIVATION_DEPTH => (None, 1.0),
+                None => {
+                    let staleness = 1.0
+                        - evidence
+                            .premises()
+                            .iter()
+                            .map(|premise| match self.facts.get(premise) {
+                                Some(premise) if premise.standing().is_active() => {
+                                    1.0 - self.currency_at_depth(premise, now, prior, depth + 1).1
+                                }
+                                Some(_) => 0.0,
+                                // Not acquired: an initial resource.
+                                None => 1.0,
+                            })
+                            .product::<f64>();
+
+                    (None, staleness)
+                }
+            };
+
+            if best
+                .as_ref()
+                .is_none_or(|(_, staleness)| candidate.1 < *staleness)
+            {
+                best = Some(candidate);
+            }
+        }
+
+        best.unwrap_or((None, 0.0))
+    }
     pub(crate) fn entries(&self) -> impl Iterator<Item = &KnowledgeEntry> {
         self.facts.values()
     }

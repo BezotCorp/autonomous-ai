@@ -1,10 +1,11 @@
-use crate::cognition::proposal::Proposal;
+use crate::{cognition::proposal::Proposal, planning::plan::Plan};
 
 /// Everything a module returns from one invocation.
 #[derive(Debug, Default)]
 pub(crate) struct ModuleOutput {
     proposals: Vec<Proposal>,
     notes: Vec<String>,
+    plan: Option<Plan>,
 }
 
 impl ModuleOutput {
@@ -17,7 +18,12 @@ impl ModuleOutput {
         self.notes.push(note.into());
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<Proposal>, Vec<String>) {
-        (self.proposals, self.notes)
+    /// Proposes a plan; only modules declaring `planning` may do so.
+    pub(crate) fn plan(&mut self, plan: Plan) {
+        self.plan = Some(plan);
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<Proposal>, Vec<String>, Option<Plan>) {
+        (self.proposals, self.notes, self.plan)
     }
 }

@@ -14,11 +14,11 @@ use crate::acquisition::{
 pub(crate) struct SourceReferenceScanner;
 
 impl SourceReferenceScanner {
-    pub(crate) fn scan(repository: &Repository, revision: &str) -> SourceScan {
+    pub(crate) fn scan(github: &Github<'_>, repository: &Repository, revision: &str) -> SourceScan {
         let mut scan = SourceScan::default();
 
-        let paths = match Github::files(repository, revision) {
-            Ok(paths) => paths,
+        let files = match github.file_blobs(repository, revision) {
+            Ok(files) => files,
 
             Err(error) => {
                 scan.fail(format!(
@@ -32,6 +32,28 @@ impl SourceReferenceScanner {
             }
         };
 
+        // Every file the scan may read, acquired together; files already
+        // acquired at the same SHA are not fetched again.
+        let wanted: Vec<String> = files
+            .iter()
+            .filter(|(path, _)| {
+                CargoManifest::matches_path(path)
+                    || CargoLockfile::matches_path(path)
+                    || path.ends_with(".rs")
+            })
+            .map(|(_, sha)| sha.clone())
+            .collect();
+        let contents = github.blobs(repository, &wanted);
+        let read = |path: &str| -> Result<String, String> {
+            let sha = files.get(path).ok_or("unknown file")?;
+
+            contents
+                .get(sha)
+                .cloned()
+                .unwrap_or_else(|| Err("content not acquired".to_owned()))
+        };
+        let paths: Vec<String> = files.keys().cloned().collect();
+
         let mut manifests = BTreeMap::new();
         let mut lockfiles = BTreeMap::new();
 
@@ -44,7 +66,7 @@ impl SourceReferenceScanner {
                 continue;
             };
 
-            let source = match Github::read_file(repository, revision, path) {
+            let source = match read(path) {
                 Ok(source) => source,
 
                 Err(error) => {
@@ -98,7 +120,7 @@ impl SourceReferenceScanner {
                 continue;
             };
 
-            let source = match Github::read_file(repository, revision, path) {
+            let source = match read(path) {
                 Ok(source) => source,
 
                 Err(error) => {

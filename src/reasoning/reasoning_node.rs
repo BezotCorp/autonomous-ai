@@ -19,6 +19,10 @@ pub(crate) struct ReasoningNode {
     validity: Validity,
     step: usize,
     revision: u64,
+    /// Probability that the content no longer holds in the present state of
+    /// the world: zero for what was observed or confirmed during the
+    /// episode, positive for recollections and what derives from them.
+    staleness: f64,
 }
 
 impl ReasoningNode {
@@ -43,6 +47,7 @@ impl ReasoningNode {
             validity: Validity::Valid,
             step,
             revision,
+            staleness: 0.0,
         }
     }
 
@@ -80,6 +85,19 @@ impl ReasoningNode {
 
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub(crate) fn staleness(&self) -> f64 {
+        self.staleness
+    }
+
+    /// Whether the content is known to hold now, not only in the past.
+    pub(crate) fn is_current(&self) -> bool {
+        self.staleness == 0.0
+    }
+
+    pub(crate) fn set_staleness(&mut self, staleness: f64) {
+        self.staleness = staleness.clamp(0.0, 1.0);
     }
 
     /// Marks the node as changed without altering it, so that modules

@@ -30,6 +30,10 @@ impl EpisodeReport {
         }
     }
 
+    pub(crate) fn episode(&self) -> &EpisodeRecord {
+        &self.episode
+    }
+
     #[cfg(test)]
     pub(crate) fn episode_answers(&self) -> &[crate::memory::answer_record::AnswerRecord] {
         self.episode.answers()

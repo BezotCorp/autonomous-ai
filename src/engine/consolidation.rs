@@ -31,6 +31,10 @@ impl Consolidation {
     ) -> ConsolidationSummary {
         let mut summary = ConsolidationSummary::default();
         let mut scopes: BTreeMap<(String, String, String), BTreeSet<Statement>> = BTreeMap::new();
+        let mut verified: BTreeMap<
+            (String, String),
+            (Option<String>, chrono::DateTime<chrono::Utc>),
+        > = BTreeMap::new();
 
         for node in graph.valid_nodes() {
             let Some(statement) = node.content().statement() else {
@@ -39,6 +43,18 @@ impl Consolidation {
 
             match node.kind() {
                 EpistemicKind::Observation => {
+                    if let Some(provenance) = node.provenance()
+                        && let Some(scope) = provenance.scope()
+                    {
+                        verified.insert(
+                            (provenance.source().to_owned(), scope.to_owned()),
+                            (
+                                provenance.revision().map(str::to_owned),
+                                provenance.acquired_at(),
+                            ),
+                        );
+                    }
+
                     if let Some(provenance) = node.provenance()
                         && let (Some(scope), Some(revision)) =
                             (provenance.scope(), provenance.revision())
@@ -75,6 +91,12 @@ impl Consolidation {
                 }
 
                 _ => {}
+            }
+        }
+
+        for ((source, scope), (revision, at)) in &verified {
+            if knowledge.verify_scope(source, scope, revision.as_deref(), *at) {
+                summary.changed_scope();
             }
         }
 

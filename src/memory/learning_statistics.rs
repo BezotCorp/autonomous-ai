@@ -2,14 +2,19 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::memory::{
-    answer_status::AnswerStatus, configuration_statistics::ConfigurationStatistics,
-    hypothesis_status::HypothesisStatus, module_statistics::ModuleStatistics,
-    persistent_memory::PersistentMemory, standing::Standing,
+use crate::{
+    consumables::{resource_state::ResourceState, resource_usage::ResourceUsage},
+    memory::{
+        answer_status::AnswerStatus, configuration_statistics::ConfigurationStatistics,
+        hypothesis_status::HypothesisStatus, module_statistics::ModuleStatistics,
+        persistent_memory::PersistentMemory, standing::Standing,
+    },
+    planning::strategy_statistic::StrategyStatistic,
 };
 
 /// Statistics recomputed from the memories, never stored: frequencies of
-/// use, outcomes, costs, answers, revisions and the state of knowledge.
+/// use, outcomes, costs, answers, revisions, consumption of external
+/// resources, strategies and the state of knowledge.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct LearningStatistics {
     episodes: usize,
@@ -29,6 +34,14 @@ pub(crate) struct LearningStatistics {
     hypotheses_open: usize,
     hypotheses_marked_refuted: usize,
     hypothesis_mean_support: f64,
+    usage: ResourceUsage,
+    resources: BTreeMap<String, ResourceState>,
+    strategies: BTreeMap<String, BTreeMap<String, StrategyStatistic>>,
+    observed_scopes: usize,
+    scope_verifications: u64,
+    scope_changes: u64,
+    acquisition_cache_entries: usize,
+    acquisition_cache_bytes: usize,
 }
 
 impl LearningStatistics {
@@ -63,6 +76,7 @@ impl LearningStatistics {
             }
 
             statistics.contradictions += episode.revisions().len();
+            statistics.usage.add(episode.usage());
 
             for impasse in episode.impasses() {
                 if impasse.kind().is_root() {
@@ -113,6 +127,17 @@ impl LearningStatistics {
                 HypothesisStatus::Refuted => statistics.hypotheses_marked_refuted += 1,
             }
         }
+
+        for (_, scope) in memory.knowledge().scopes() {
+            statistics.observed_scopes += 1;
+            statistics.scope_verifications += scope.verifications();
+            statistics.scope_changes += scope.changes();
+        }
+
+        statistics.resources = memory.resources().clone();
+        statistics.strategies = memory.routing().strategies().clone();
+        statistics.acquisition_cache_entries = memory.acquisitions().len();
+        statistics.acquisition_cache_bytes = memory.acquisitions().bytes();
 
         let hypotheses = statistics.hypotheses_open + statistics.hypotheses_marked_refuted;
 

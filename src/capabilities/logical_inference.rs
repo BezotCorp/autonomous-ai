@@ -261,13 +261,14 @@ impl Exploration<'_> {
 mod tests {
     use super::LogicalInference;
     use crate::{
-        cognition::{cognitive_module::CognitiveModule, module_context::ModuleContext},
-        memory::knowledge_memory::KnowledgeMemory,
+        cognition::{
+            cognitive_module::CognitiveModule, module_context::ModuleContext,
+            test_environment::TestEnvironment,
+        },
         reasoning::{
             epistemic_kind::EpistemicKind, producer::Producer, reasoning_graph::ReasoningGraph,
         },
         representation::content::Content,
-        resources::initial_resources::InitialResources,
     };
 
     #[test]
@@ -297,14 +298,12 @@ mod tests {
                 .unwrap();
         }
 
-        let knowledge = KnowledgeMemory::default();
-        let resources = InitialResources::default();
         let module = LogicalInference::new();
-        let output = module
-            .apply(&ModuleContext::new(&graph, &knowledge, &resources, 0))
+        let output = TestEnvironment::default()
+            .with(|environment| module.apply(&ModuleContext::new(&graph, environment, 0, None)))
             .unwrap();
 
-        let (proposals, _) = output.into_parts();
+        let (proposals, _, _) = output.into_parts();
         let contents: Vec<String> = proposals
             .into_iter()
             .map(|proposal| proposal.into_parts().0.to_string())

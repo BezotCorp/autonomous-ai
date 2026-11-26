@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    acquisition::github::Github,
+    acquisition::{fingerprint::Fingerprint, github::Github},
     cognition::{
         cognitive_module::CognitiveModule, module_context::ModuleContext,
         module_descriptor::ModuleDescriptor, module_output::ModuleOutput, proposal::Proposal,
@@ -14,7 +14,9 @@ use crate::{
 };
 
 /// Lists the repositories of an owner on GitHub. The owner comes from the
-/// need itself or, failing that, from the owners already known.
+/// need itself or, failing that, from the owners already known. The list
+/// of an owner is one observed scope, whose revision is the fingerprint of
+/// the list: an unchanged list is recognised as such.
 pub(crate) struct RepositoryDiscovery {
     descriptor: ModuleDescriptor,
 }
@@ -76,15 +78,19 @@ impl CognitiveModule for RepositoryDiscovery {
         }
 
         let mut failures = Vec::new();
+        let github = Github::new(context.access());
 
         for owner in &owners {
             let listed = Statement::new("repositories_listed", vec![Term::symbol(owner)]);
 
-            if graph.holding(&listed).next().is_some() {
+            if graph
+                .holding(&listed)
+                .any(|id| graph.node(id).is_some_and(|node| node.is_current()))
+            {
                 continue;
             }
 
-            let repositories = match Github::repositories(owner) {
+            let repositories = match github.repositories(owner) {
                 Ok(repositories) => repositories,
                 Err(error) => {
                     failures.push(format!("{owner}: {error}"));
@@ -92,7 +98,15 @@ impl CognitiveModule for RepositoryDiscovery {
                 }
             };
 
-            let provenance = Provenance::new("github", Some(format!("owner:{owner}")), None);
+            let names: Vec<String> = repositories
+                .iter()
+                .map(|repository| repository.full_name())
+                .collect();
+            let provenance = Provenance::new(
+                "github",
+                Some(format!("owner:{owner}")),
+                Some(Fingerprint::of(names.iter().map(String::as_str))),
+            );
             let mut observe = |statement: Statement| {
                 output.propose(
                     Proposal::new(

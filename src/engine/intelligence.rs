@@ -1,12 +1,18 @@
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
+    acquisition::external_access::ExternalAccess,
     cognition::{
-        module_context::ModuleContext, module_output::ModuleOutput, module_registry::ModuleRegistry,
+        capability_model::CapabilityModel, module_context::ModuleContext,
+        module_environment::ModuleEnvironment, module_registry::ModuleRegistry, proposal::Proposal,
     },
+    consumables::resource_meter::ResourceMeter,
     engine::{
         belief_revision::BeliefRevision, candidate::Candidate, consolidation::Consolidation,
         episode_report::EpisodeReport, impasse_diagnosis::ImpasseDiagnosis,
@@ -18,12 +24,14 @@ use crate::{
     memory::{
         episode_configuration::EpisodeConfiguration, episode_record::EpisodeRecord,
         invocation_outcome::InvocationOutcome, invocation_record::InvocationRecord,
-        knowledge_memory::KnowledgeMemory, persistent_memory::PersistentMemory,
-        revision_record::RevisionRecord, routing_memory::RoutingMemory, termination::Termination,
+        knowledge_exploitation::KnowledgeExploitation, knowledge_memory::KnowledgeMemory,
+        persistent_memory::PersistentMemory, revision_record::RevisionRecord,
+        routing_memory::RoutingMemory, termination::Termination,
     },
+    planning::{plan::Plan, plan_record::PlanRecord},
     reasoning::{
-        epistemic_kind::EpistemicKind, node_id::NodeId, producer::Producer,
-        reasoning_graph::ReasoningGraph, working_memory::WorkingMemory,
+        epistemic_kind::EpistemicKind, invalidation_cause::InvalidationCause, node_id::NodeId,
+        producer::Producer, reasoning_graph::ReasoningGraph, working_memory::WorkingMemory,
     },
     representation::{
         bindings::Bindings, content::Content, provenance::Provenance, statement::Statement,
@@ -35,6 +43,11 @@ use crate::{
 /// learned selector mobilise cognitive modules on a shared working memory,
 /// revises its beliefs when contradictions appear, answers with
 /// justifications and finally integrates what it learned.
+///
+/// Beyond reasoning, it keeps track of what holds now versus what was
+/// remembered, of the plans proposed by planning modules and of the
+/// external resources consumed, so that every decision weighs what remains
+/// to gain against time and the scarcity of resources.
 pub(crate) struct Intelligence {
     registry: ModuleRegistry,
     resources: InitialResources,
@@ -46,6 +59,8 @@ pub(crate) struct Intelligence {
 struct EpisodeTrace {
     revisions: Vec<RevisionRecord>,
     withdrawn: Vec<(NodeId, String)>,
+    plans: Vec<PlanRecord>,
+    exploitation: KnowledgeExploitation,
 }
 
 /// What came out of integrating the proposals of one invocation.
@@ -99,6 +114,14 @@ impl Intelligence {
             &empty_routing
         };
 
+        let access = ExternalAccess::new(
+            ResourceMeter::new(
+                memory.resources().clone(),
+                configuration.resource_budgets().clone(),
+            ),
+            memory.acquisitions(),
+        );
+
         let mut initial_errors = Vec::new();
 
         for (content, kind, producer, provenance) in self.initial_contents(event) {
@@ -117,17 +140,24 @@ impl Intelligence {
             }
         }
 
-        // Kinds of information the long-term memory can currently provide:
-        // part of the situation in which modules are chosen.
-        let remembered: BTreeSet<String> = knowledge
-            .active_entries()
-            .map(|entry| entry.statement().signature())
-            .chain(
-                knowledge
-                    .hypotheses()
-                    .map(|record| record.rule().conclusion().signature()),
-            )
-            .collect();
+        let remembered = self.remembered(knowledge);
+        let capabilities = CapabilityModel::new(
+            routing,
+            &self.parameters,
+            self.registry
+                .modules()
+                .iter()
+                .map(|module| module.descriptor().clone())
+                .collect(),
+            remembered.clone(),
+        );
+        let environment = ModuleEnvironment::new(
+            knowledge,
+            &self.resources,
+            &access,
+            &capabilities,
+            &self.parameters,
+        );
 
         let selector = ModuleSelector::new(routing, &self.parameters);
         let mut seen = vec![0_u64; self.registry.modules().len()];
@@ -149,11 +179,24 @@ impl Intelligence {
                 break Termination::TimeBudgetExhausted;
             }
 
-            let candidates = self.candidates(&working, &seen, previous.as_deref(), &remembered);
+            let active_plan = trace.plans.iter().rev().find(|record| record.is_active());
+            let candidates = self.candidates(
+                &working,
+                &seen,
+                previous.as_deref(),
+                &remembered,
+                active_plan,
+            );
 
-            let Some((position, selection)) = selector.select(&candidates, &mut random) else {
+            let Some((position, selection)) =
+                selector.select(&candidates, access.meter(), &mut random)
+            else {
                 break Termination::Quiescent;
             };
+
+            if selection.best_expected_utility() == f64::NEG_INFINITY {
+                break Termination::ResourcesExhausted;
+            }
 
             if selection.best_expected_utility() < self.parameters.minimum_utility() {
                 break Termination::NothingWorthTrying;
@@ -163,35 +206,44 @@ impl Intelligence {
             let module = &self.registry.modules()[index];
             let descriptor = module.descriptor();
             let revision_before = working.graph().revision();
+            let usage_before = access.meter().usage();
+            let available_before = access.meter().availabilities();
 
             let started = Instant::now();
             let result = module.apply(&ModuleContext::new(
                 working.graph(),
-                knowledge,
-                &self.resources,
+                &environment,
                 seen[index],
+                active_plan.map(PlanRecord::plan),
             ));
-            let duration = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let elapsed = started.elapsed();
+            let duration = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+            let usage = access.meter().usage().since(&usage_before);
+            let actual_cost = self.parameters.cost_weight_per_second() * elapsed.as_secs_f64()
+                + self.parameters.scarcity_weight()
+                    * ResourceMeter::scarcity_cost_given(&available_before, usage.consumption());
 
             seen[index] = revision_before;
 
-            let (integration, notes, error) = match result {
+            let (integration, notes, plan, error) = match result {
                 Ok(output) => {
-                    let (integration, notes) = Self::integrate(
+                    let (proposals, notes, plan) = output.into_parts();
+                    let integration = Self::integrate(
                         &mut working,
                         &mut trace,
                         descriptor.name(),
                         |kind| descriptor.produces(kind),
-                        output,
+                        proposals,
                         step,
                     );
 
-                    (integration, notes, None)
+                    (integration, notes, plan, None)
                 }
-                Err(error) => (Integration::default(), Vec::new(), Some(error)),
+                Err(error) => (Integration::default(), Vec::new(), None, Some(error)),
             };
 
-            invocations.push(InvocationRecord::new(
+            let succeeded = error.is_none();
+            let mut record = InvocationRecord::new(
                 step,
                 descriptor.name().to_owned(),
                 selection,
@@ -201,8 +253,38 @@ impl Intelligence {
                 integration.rejected,
                 notes,
                 error,
-            ));
+            );
 
+            if let Some(active) = trace
+                .plans
+                .iter_mut()
+                .rev()
+                .find(|record| record.is_active())
+            {
+                active.account(
+                    descriptor.name(),
+                    step,
+                    succeeded,
+                    elapsed.as_secs_f64(),
+                    &usage,
+                    actual_cost,
+                );
+            }
+
+            match plan {
+                Some(plan) if descriptor.plans() => {
+                    Self::adopt(&mut trace, plan, step);
+                    record.adopt_plan();
+                }
+                Some(_) => record.reject(format!(
+                    "plan proposed by {}, which does not declare planning",
+                    descriptor.name()
+                )),
+                None => {}
+            }
+
+            record.account(usage, actual_cost);
+            invocations.push(record);
             previous = Some(descriptor.name().to_owned());
         };
 
@@ -217,9 +299,37 @@ impl Intelligence {
             support.extend(answer_support);
         }
 
-        Self::assess(graph, &support, &mut invocations);
+        trace.exploitation.supported_answers(
+            support
+                .iter()
+                .filter_map(|id| graph.node(*id))
+                .filter(|node| node.kind() == EpistemicKind::Recollection)
+                .count(),
+        );
+
+        let last_step = invocations.len();
+        let mut achieved_plans = BTreeSet::new();
+
+        for record in &mut trace.plans {
+            let achieved = record.plan().goals().iter().all(|goal| graph.answers(goal));
+
+            record.conclude(last_step, achieved);
+
+            if record.achieved() {
+                achieved_plans.insert(record.adopted_at());
+            }
+        }
+
+        Self::assess(graph, &support, &achieved_plans, &mut invocations);
 
         let impasses = ImpasseDiagnosis::diagnose(graph, &self.registry, &invocations);
+        let resource_states = access.meter().states();
+        let total_usage = access.meter().usage();
+        let (_, store) = access.into_parts();
+        let (stored, used) = store.into_parts();
+
+        *memory.resources_mut() = resource_states.clone();
+        memory.acquisitions_mut().integrate(stored, used);
 
         let (knowledge_memory, routing_memory, experiences) = memory.parts_mut();
 
@@ -243,6 +353,12 @@ impl Intelligence {
             impasses,
             termination,
             notes,
+        )
+        .with_execution(
+            trace.plans,
+            total_usage,
+            resource_states,
+            trace.exploitation,
         );
 
         routing_memory.learn(&record);
@@ -254,6 +370,65 @@ impl Intelligence {
             routing_memory.episodes_learned(),
             detailed.then_some(working),
         )
+    }
+
+    /// Kinds of information the long-term memory can provide, with how
+    /// outdated they are on average.
+    fn remembered(&self, knowledge: &KnowledgeMemory) -> BTreeMap<String, f64> {
+        let now = Utc::now();
+        let prior = self.parameters.change_prior();
+        let mut totals: BTreeMap<String, (f64, usize)> = BTreeMap::new();
+
+        for entry in knowledge.active_entries() {
+            let (_, staleness) = knowledge.currency(entry, now, prior);
+            let total = totals.entry(entry.statement().signature()).or_default();
+
+            total.0 += staleness;
+            total.1 += 1;
+        }
+
+        for record in knowledge.hypotheses() {
+            totals
+                .entry(record.rule().conclusion().signature())
+                .or_default()
+                .1 += 1;
+        }
+
+        totals
+            .into_iter()
+            .map(|(signature, (staleness, count))| (signature, staleness / count.max(1) as f64))
+            .collect()
+    }
+
+    /// Follows a newly proposed plan, unless it repeats the active one;
+    /// the active plan is then recorded as revised.
+    fn adopt(trace: &mut EpisodeTrace, plan: Plan, step: usize) {
+        if let Some(active) = trace
+            .plans
+            .iter_mut()
+            .rev()
+            .find(|record| record.is_active())
+        {
+            if active.plan() == &plan {
+                return;
+            }
+
+            let reason = if active.plan().goals() != plan.goals() {
+                "the open goals changed".to_owned()
+            } else if active.has_failures() {
+                "a planned step failed".to_owned()
+            } else {
+                format!(
+                    "new information favoured {} over {}",
+                    plan.strategy(),
+                    active.plan().strategy()
+                )
+            };
+
+            active.revise(step, reason);
+        }
+
+        trace.plans.push(PlanRecord::new(plan, step));
     }
 
     fn initial_contents(
@@ -294,51 +469,67 @@ impl Intelligence {
             .collect()
     }
 
+    /// Every question has a definite answer known to hold now.
     fn questions_answered(working: &WorkingMemory) -> bool {
         !working.questions().is_empty()
             && working
                 .questions()
                 .iter()
-                .all(|question| question.is_ground() && working.graph().answers(question))
+                .all(|question| question.is_ground() && working.graph().answers_currently(question))
     }
 
     /// Modules having valid, unprocessed content they consume, with the
-    /// features describing that content.
+    /// features describing that content and the stake of acting on it.
     fn candidates(
         &self,
         working: &WorkingMemory,
         seen: &[u64],
         previous: Option<&str>,
-        remembered: &BTreeSet<String>,
+        remembered: &BTreeMap<String, f64>,
+        active_plan: Option<&PlanRecord>,
     ) -> Vec<Candidate> {
         let graph = working.graph();
         let mut candidates = Vec::new();
+        let ready = active_plan.map(PlanRecord::ready_steps).unwrap_or_default();
 
         for (index, module) in self.registry.modules().iter().enumerate() {
             let descriptor = module.descriptor();
             let mut features = BTreeSet::new();
+            let mut stake: f64 = 0.0;
 
             for node in graph.valid_nodes() {
                 if node.revision() <= seen[index] || !descriptor.consumes(node.content().kind()) {
                     continue;
                 }
 
-                if let Some(pattern) = node.content().need()
-                    && (!descriptor.supplies(&pattern.signature()) || graph.answers(pattern))
-                {
-                    continue;
+                if let Some(pattern) = node.content().need() {
+                    if !descriptor.supplies(&pattern.signature())
+                        || !ModuleContext::open_for(graph, pattern, descriptor)
+                    {
+                        continue;
+                    }
+
+                    // Remembered answers leave at stake only the chance
+                    // that they are outdated.
+                    match graph.answer_staleness(pattern) {
+                        Some(staleness) => {
+                            stake = stake.max(staleness);
+                            features.insert("verification".to_owned());
+                        }
+                        None => stake = 1.0,
+                    }
+
+                    if remembered.contains_key(&pattern.signature()) {
+                        features.insert(format!("remembered:{}", pattern.signature()));
+                    }
+                } else {
+                    stake = 1.0;
                 }
 
                 features.insert(node.content().feature());
-
-                if let Some(pattern) = node.content().need()
-                    && remembered.contains(&pattern.signature())
-                {
-                    features.insert(format!("remembered:{}", pattern.signature()));
-                }
             }
 
-            if features.is_empty() {
+            if features.is_empty() || stake <= 0.0 {
                 continue;
             }
 
@@ -353,10 +544,38 @@ impl Intelligence {
                 features.insert(format!("after:{previous}"));
             }
 
+            // Position of the module relative to the plan being followed:
+            // whether following plans pays off is learned like the rest.
+            match active_plan {
+                Some(record) if descriptor.plans() => {
+                    features.insert(if record.has_failures() {
+                        "plan:failing".to_owned()
+                    } else {
+                        "plan:active".to_owned()
+                    });
+                }
+                Some(record) => {
+                    let steps = record.steps_of(descriptor.name());
+
+                    features.insert(if steps.is_empty() {
+                        "plan:outside".to_owned()
+                    } else if steps.iter().any(|step| ready.contains(step)) {
+                        "plan:ready".to_owned()
+                    } else {
+                        "plan:waiting".to_owned()
+                    });
+                }
+                None if descriptor.plans() => {
+                    features.insert("plan:none".to_owned());
+                }
+                None => {}
+            }
+
             candidates.push(Candidate::new(
                 index,
                 descriptor.name().to_owned(),
                 features.into_iter().collect(),
+                stake,
             ));
         }
 
@@ -364,17 +583,26 @@ impl Intelligence {
     }
 
     /// Inserts the proposals of a module into the graph, enforcing its
-    /// declared contract, then revises beliefs if contradictions appeared.
+    /// declared contract, then reconciles what is remembered with what was
+    /// just observed and revises beliefs if contradictions appeared.
+    ///
+    /// Observations sharing a source, scope and revision describe that
+    /// whole scope at that revision. A recollection from the same revision
+    /// is therefore confirmed; one from another revision, not observed
+    /// again, is superseded. A recollection of a scope already observed
+    /// in another revision is refused.
     fn integrate(
         working: &mut WorkingMemory,
         trace: &mut EpisodeTrace,
         module: &str,
         allowed: impl Fn(EpistemicKind) -> bool,
-        output: ModuleOutput,
+        proposals: Vec<Proposal>,
         step: usize,
-    ) -> (Integration, Vec<String>) {
+    ) -> Integration {
         let mut integration = Integration::default();
-        let (proposals, notes) = output.into_parts();
+        let current_scopes = Self::current_scopes(working.graph());
+        let mut observed: BTreeMap<(String, String), (Option<String>, NodeId)> = BTreeMap::new();
+        let mut observed_statements: BTreeSet<Statement> = BTreeSet::new();
 
         for proposal in proposals {
             if !allowed(proposal.kind()) {
@@ -384,22 +612,67 @@ impl Intelligence {
                 continue;
             }
 
+            let mut staleness = proposal.staleness();
+
+            if proposal.kind() == EpistemicKind::Recollection
+                && let Some(provenance) = proposal.provenance()
+                && let Some(scope) = provenance.scope()
+                && let Some(revisions) =
+                    current_scopes.get(&(provenance.source().to_owned(), scope.to_owned()))
+            {
+                if revisions.contains(&provenance.revision().map(str::to_owned)) {
+                    staleness = 0.0;
+                } else {
+                    trace.exploitation.refused_outdated();
+                    integration.rejected.push(format!(
+                        "{}: superseded by the current observation of {scope}",
+                        proposal.content()
+                    ));
+                    continue;
+                }
+            }
+
             let (content, kind, premises, provenance) = proposal.into_parts();
             let feature = content.feature();
             let description = content.to_string();
+            let scope = provenance.as_ref().and_then(|provenance| {
+                Some((
+                    (
+                        provenance.source().to_owned(),
+                        provenance.scope()?.to_owned(),
+                    ),
+                    provenance.revision().map(str::to_owned),
+                ))
+            });
+            let statement = content.statement().cloned();
 
-            match working.graph_mut().insert(
+            match working.graph_mut().insert_dated(
                 content,
                 kind,
                 Producer::Module(module.to_owned()),
                 premises,
                 provenance,
                 step,
+                staleness,
             ) {
                 Ok(insertion) => {
                     if insertion.created() {
                         integration.produced.push(insertion.id().index());
                         integration.features.insert(feature);
+
+                        if kind == EpistemicKind::Recollection {
+                            trace.exploitation.recalled(1);
+                        }
+                    }
+
+                    if kind == EpistemicKind::Observation {
+                        if let Some((scope, revision)) = scope {
+                            observed.entry(scope).or_insert((revision, insertion.id()));
+                        }
+
+                        if let Some(statement) = statement {
+                            observed_statements.insert(statement);
+                        }
                     }
 
                     Self::revise(working, insertion.contradictions(), step, trace);
@@ -408,7 +681,89 @@ impl Intelligence {
             }
         }
 
-        (integration, notes)
+        if !observed.is_empty() {
+            Self::reconcile(working, trace, &observed, &observed_statements, step);
+        }
+
+        integration
+    }
+
+    /// Source scopes observed during the episode, with their revisions.
+    fn current_scopes(
+        graph: &ReasoningGraph,
+    ) -> BTreeMap<(String, String), BTreeSet<Option<String>>> {
+        let mut scopes: BTreeMap<(String, String), BTreeSet<Option<String>>> = BTreeMap::new();
+
+        for node in graph.valid_nodes() {
+            if node.kind() != EpistemicKind::Observation {
+                continue;
+            }
+
+            if let Some(provenance) = node.provenance()
+                && let Some(scope) = provenance.scope()
+            {
+                scopes
+                    .entry((provenance.source().to_owned(), scope.to_owned()))
+                    .or_default()
+                    .insert(provenance.revision().map(str::to_owned));
+            }
+        }
+
+        scopes
+    }
+
+    fn reconcile(
+        working: &mut WorkingMemory,
+        trace: &mut EpisodeTrace,
+        observed: &BTreeMap<(String, String), (Option<String>, NodeId)>,
+        observed_statements: &BTreeSet<Statement>,
+        step: usize,
+    ) {
+        let graph = working.graph();
+        let mut confirmed = Vec::new();
+        let mut superseded = Vec::new();
+
+        for node in graph.valid_nodes() {
+            if node.kind() != EpistemicKind::Recollection || node.is_current() {
+                continue;
+            }
+
+            if node
+                .content()
+                .statement()
+                .is_some_and(|statement| observed_statements.contains(statement))
+            {
+                confirmed.push(node.id());
+                continue;
+            }
+
+            let Some(provenance) = node.provenance() else {
+                continue;
+            };
+
+            let Some(scope) = provenance.scope() else {
+                continue;
+            };
+
+            if let Some((revision, by)) =
+                observed.get(&(provenance.source().to_owned(), scope.to_owned()))
+            {
+                if revision.as_deref() == provenance.revision() {
+                    confirmed.push(node.id());
+                } else {
+                    superseded.push((node.id(), *by));
+                }
+            }
+        }
+
+        let graph = working.graph_mut();
+
+        trace.exploitation.confirmed(graph.confirm(&confirmed));
+        trace.exploitation.superseded(superseded.len());
+
+        for (id, by) in superseded {
+            graph.invalidate(id, InvalidationCause::Superseded { by }, step);
+        }
     }
 
     fn revise(
@@ -437,10 +792,12 @@ impl Intelligence {
 
     /// Assigns each invocation a verifiable outcome once the episode is over.
     /// A need contributes when an answer-supporting statement fulfils it;
-    /// satisfying a need, or formulating one later satisfied, is progress.
+    /// satisfying a need, or formulating one later satisfied, is progress,
+    /// and so is proposing a plan whose goals were reached.
     fn assess(
         graph: &ReasoningGraph,
         support: &BTreeSet<NodeId>,
+        achieved_plans: &BTreeSet<usize>,
         invocations: &mut [InvocationRecord],
     ) {
         let supporting: Vec<&Statement> = support
@@ -485,12 +842,14 @@ impl Intelligence {
                 .map(|index| NodeId::new(*index))
                 .collect();
 
-            let outcome = if produced.is_empty() {
-                InvocationOutcome::Unproductive
-            } else if produced.iter().any(|id| contributes(*id)) {
+            let planned = invocation.adopted_plan() && achieved_plans.contains(&invocation.step());
+
+            let outcome = if produced.iter().any(|id| contributes(*id)) {
                 InvocationOutcome::Contributed
-            } else if produced.iter().any(|id| progress.contains(id)) {
+            } else if planned || produced.iter().any(|id| progress.contains(id)) {
                 InvocationOutcome::Advanced
+            } else if produced.is_empty() {
+                InvocationOutcome::Unproductive
             } else if produced
                 .iter()
                 .any(|id| graph.node(*id).is_some_and(|node| node.is_valid()))
@@ -650,5 +1009,246 @@ mod tests {
             AnswerStatus::Proven,
             "{report:#?}"
         );
+    }
+
+    fn remembering(
+        statement: &str,
+        source: &str,
+        scope: &str,
+        revision: &str,
+        days: i64,
+    ) -> PersistentMemory {
+        let mut memory = PersistentMemory::default();
+        let observed_at = chrono::Utc::now() - chrono::Duration::days(days);
+        let (knowledge, _, _) = memory.parts_mut();
+
+        knowledge.record_observation(
+            statement.parse().unwrap(),
+            Some(
+                crate::representation::provenance::Provenance::new(
+                    source,
+                    Some(scope.to_owned()),
+                    Some(revision.to_owned()),
+                )
+                .confirmed_at(observed_at),
+            ),
+            uuid::Uuid::now_v7(),
+        );
+        knowledge.verify_scope(source, scope, Some(revision), observed_at);
+        memory
+    }
+
+    fn registry(
+        modules: Vec<crate::cognition::scripted_module::ScriptedModule>,
+    ) -> crate::cognition::module_registry::ModuleRegistry {
+        let mut registry = crate::cognition::module_registry::ModuleRegistry::default();
+
+        registry.register(crate::capabilities::knowledge_retrieval::KnowledgeRetrieval::new());
+
+        for module in modules {
+            registry.register(module);
+        }
+
+        registry
+    }
+
+    #[test]
+    fn distinguishes_remembered_from_verified_answers() {
+        let question = &["level(tank, ?level)"];
+
+        // Without any way to observe the present, the remembered answer is
+        // given as historical, with the probability that it is outdated.
+        let mut memory = remembering("level(tank, 3)", "probe", "tank", "r1", 10);
+        let report = Intelligence::new(
+            registry(Vec::new()),
+            InitialResources::default(),
+            LearningParameters::default(),
+        )
+        .reason(
+            &event("offline", &["context(x)"], &[], question),
+            &mut memory,
+            EpisodeConfiguration::new(1, true, true),
+            false,
+        );
+        let answer = &report.episode_answers()[0];
+
+        assert_eq!(answer.status(), AnswerStatus::Proven, "{report:#?}");
+        assert!(!answer.is_current());
+        assert!(answer.staleness() > 0.9);
+
+        // An observation of the same revision confirms the recollection.
+        let mut memory = remembering("level(tank, 3)", "probe", "tank", "r1", 10);
+        let report = Intelligence::new(
+            registry(vec![
+                crate::cognition::scripted_module::ScriptedModule::new(
+                    "probe",
+                    None,
+                    "level(tank, 3)",
+                )
+                .observing("probe", "tank", "r1"),
+            ]),
+            InitialResources::default(),
+            LearningParameters::default().with_cost_weight_per_second(0.0),
+        )
+        .reason(
+            &event("verified", &["context(x)"], &[], question),
+            &mut memory,
+            EpisodeConfiguration::new(2, true, true),
+            false,
+        );
+
+        assert!(report.episode_answers()[0].is_current(), "{report:#?}");
+
+        // A newer revision supersedes what was remembered from the old one.
+        let mut memory = remembering("level(tank, 3)", "probe", "tank", "r1", 10);
+        let report = Intelligence::new(
+            registry(vec![
+                crate::cognition::scripted_module::ScriptedModule::new(
+                    "probe",
+                    None,
+                    "level(tank, 5)",
+                )
+                .observing("probe", "tank", "r2"),
+            ]),
+            InitialResources::default(),
+            LearningParameters::default().with_cost_weight_per_second(0.0),
+        )
+        .reason(
+            &event("changed", &["context(x)"], &[], question),
+            &mut memory,
+            EpisodeConfiguration::new(3, true, true),
+            false,
+        );
+        let answer = &report.episode_answers()[0];
+
+        assert_eq!(
+            answer.answers(),
+            &["level(tank, 5)"
+                .parse::<crate::representation::statement::Statement>()
+                .unwrap()],
+            "{report:#?}"
+        );
+        assert!(answer.is_current());
+        assert_eq!(
+            memory
+                .knowledge()
+                .active_entries()
+                .map(|entry| entry.statement().to_string())
+                .filter(|statement| statement.starts_with("level"))
+                .collect::<Vec<_>>(),
+            vec!["level(tank, 5)".to_owned()]
+        );
+    }
+
+    #[test]
+    fn respects_exhausted_resources_without_forbidding_affordable_ones() {
+        let intelligence = Intelligence::new(
+            registry(vec![
+                crate::cognition::scripted_module::ScriptedModule::new(
+                    "meter_reader",
+                    None,
+                    "reading(1)",
+                )
+                .consuming("api", 1.0),
+            ]),
+            InitialResources::default(),
+            LearningParameters::default(),
+        );
+        let mut memory = PersistentMemory::default();
+        let ask = |name: &str| event(name, &["context(x)"], &[], &["reading(?value)"]);
+
+        // The module is used while the resource is affordable, which
+        // teaches what it consumes.
+        let first = intelligence.reason(
+            &ask("first"),
+            &mut memory,
+            EpisodeConfiguration::new(1, true, true),
+            false,
+        );
+
+        assert_eq!(first.episode_answers()[0].status(), AnswerStatus::Proven);
+
+        // An imposed budget of zero makes the acquisition impossible.
+        let starved = intelligence.reason(
+            &ask("starved"),
+            &mut memory,
+            EpisodeConfiguration::new(2, false, true)
+                .with_resource_budgets([("api".to_owned(), 0.0)].into()),
+            false,
+        );
+
+        assert_eq!(
+            starved.episode().termination(),
+            crate::memory::termination::Termination::ResourcesExhausted,
+            "{starved:#?}"
+        );
+        assert_eq!(starved.episode().usage().refused(), 0);
+
+        // A budget of a few units leaves it possible.
+        let affordable = intelligence.reason(
+            &ask("affordable"),
+            &mut memory,
+            EpisodeConfiguration::new(3, false, true)
+                .with_resource_budgets([("api".to_owned(), 3.0)].into()),
+            false,
+        );
+
+        assert_eq!(
+            affordable.episode_answers()[0].status(),
+            AnswerStatus::Proven
+        );
+    }
+
+    #[test]
+    fn plans_learned_prerequisites_and_learns_from_plans() {
+        let mut registry = crate::cognition::module_registry::ModuleRegistry::default();
+
+        registry.register(crate::capabilities::strategic_planning::StrategicPlanning::new());
+        registry.register(crate::cognition::scripted_module::ScriptedModule::new(
+            "gatherer",
+            Some("item(?x)"),
+            "fact(?x, 1)",
+        ));
+        registry.register(crate::cognition::scripted_module::ScriptedModule::new(
+            "lister", None, "item(a)",
+        ));
+
+        let intelligence = Intelligence::new(
+            registry,
+            InitialResources::default(),
+            LearningParameters::default(),
+        );
+        let mut memory = PersistentMemory::default();
+        let mut adopted = Vec::new();
+
+        for seed in 1..=12 {
+            let report = intelligence.reason(
+                &event(
+                    &format!("e{seed}"),
+                    &["context(x)"],
+                    &[],
+                    &["fact(?which, 1)"],
+                ),
+                &mut memory,
+                EpisodeConfiguration::new(seed, false, true),
+                false,
+            );
+
+            assert_eq!(report.episode_answers()[0].status(), AnswerStatus::Proven);
+            adopted.extend(report.episode().plans().iter().cloned());
+        }
+
+        // Once the gatherer has been seen to need items, plans anticipate
+        // that need and order the lister first.
+        let anticipated = adopted
+            .iter()
+            .find(|record| record.plan().strategy().contains("item/1<-lister"))
+            .unwrap_or_else(|| panic!("no plan anticipated the prerequisite: {adopted:#?}"));
+        let steps = anticipated.plan().steps();
+
+        assert_eq!(steps[0].module(), "lister");
+        assert_eq!(steps[1].module(), "gatherer");
+        assert_eq!(steps[1].depends_on(), &[0]);
+        assert!(!memory.routing().strategies().is_empty());
     }
 }

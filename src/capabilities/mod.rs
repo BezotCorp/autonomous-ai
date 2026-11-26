@@ -10,3 +10,4 @@ pub(crate) mod relational_analysis;
 pub(crate) mod release_observation;
 pub(crate) mod repository_discovery;
 pub(crate) mod source_reference_observation;
+pub(crate) mod strategic_planning;

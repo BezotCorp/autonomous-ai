@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
+
+use crate::interface::output::Output;
 
 /// Parsed command line.
 pub(crate) enum Arguments {
@@ -12,8 +14,10 @@ pub(crate) enum Arguments {
         offline: bool,
         maximum_invocations: Option<usize>,
         cost_weight: Option<f64>,
+        scarcity_weight: Option<f64>,
         minimum_utility: Option<f64>,
-        detailed: bool,
+        budgets: BTreeMap<String, f64>,
+        output: Output,
     },
     /// Prints a section of the persistent memory.
     Inspect { memory: PathBuf, section: String },
@@ -29,8 +33,11 @@ impl Arguments {
         "  autonomous-ai run --memory <memory.bin> --resources <dir> [--seed <n>]\n",
         "                    [--without-knowledge] [--without-routing] [--offline]\n",
         "                    [--max-invocations <n>] [--cost-weight <per-second>]\n",
-        "                    [--minimum-utility <u>] [--detailed]   < event.ron\n",
-        "  autonomous-ai inspect --memory <memory.bin> [--section knowledge|hypotheses|routing|experiences|statistics]\n",
+        "                    [--scarcity-weight <w>] [--minimum-utility <u>]\n",
+        "                    [--resource-budget <resource>=<units>]...\n",
+        "                    [--summary | --detailed]   < event.ron\n",
+        "  autonomous-ai inspect --memory <memory.bin>\n",
+        "                    [--section summary|statistics|knowledge|hypotheses|scopes|routing|resources|experiences]\n",
         "  autonomous-ai relearn --memory <memory.bin>\n",
         "  autonomous-ai modules",
     );
@@ -42,14 +49,16 @@ impl Arguments {
         let mut memory = None;
         let mut resources = None;
         let mut seed = None;
-        let mut section = "statistics".to_owned();
+        let mut section = "summary".to_owned();
         let mut acquired_knowledge = true;
         let mut learned_routing = true;
         let mut offline = false;
         let mut maximum_invocations = None;
         let mut cost_weight = None;
+        let mut scarcity_weight = None;
         let mut minimum_utility = None;
-        let mut detailed = false;
+        let mut budgets = BTreeMap::new();
+        let mut output = Output::Report;
 
         while let Some(option) = arguments.next() {
             let mut value = || {
@@ -70,13 +79,28 @@ impl Arguments {
                 "--cost-weight" => {
                     cost_weight = Some(value()?.parse().map_err(|_| "Invalid cost weight")?)
                 }
+                "--scarcity-weight" => {
+                    scarcity_weight = Some(value()?.parse().map_err(|_| "Invalid scarcity weight")?)
+                }
+                "--resource-budget" => {
+                    let budget = value()?;
+                    let (resource, units) = budget.split_once('=').ok_or(format!(
+                        "Invalid resource budget {budget}: expected <resource>=<units>"
+                    ))?;
+                    let units: f64 = units
+                        .parse()
+                        .map_err(|_| format!("Invalid number of units in {budget}"))?;
+
+                    budgets.insert(resource.to_owned(), units);
+                }
                 "--minimum-utility" => {
                     minimum_utility = Some(value()?.parse().map_err(|_| "Invalid minimum utility")?)
                 }
                 "--without-knowledge" => acquired_knowledge = false,
                 "--without-routing" => learned_routing = false,
                 "--offline" => offline = true,
-                "--detailed" => detailed = true,
+                "--detailed" => output = Output::Detailed,
+                "--summary" => output = Output::Summary,
                 other => return Err(format!("Unknown option {other}\n{}", Self::USAGE)),
             }
         }
@@ -97,8 +121,10 @@ impl Arguments {
                 offline,
                 maximum_invocations,
                 cost_weight,
+                scarcity_weight,
                 minimum_utility,
-                detailed,
+                budgets,
+                output,
             }),
             "inspect" => Ok(Self::Inspect {
                 memory: memory()?,

@@ -7,6 +7,7 @@ use crate::representation::{rule::Rule, statement::Statement};
 pub(crate) struct ConsolidationSummary {
     new_observations: usize,
     new_derivations: usize,
+    scopes_changed: usize,
     obsolete: Vec<Statement>,
     hypotheses_proposed: Vec<Rule>,
     hypotheses_corroborated: Vec<(Rule, Statement)>,
@@ -20,6 +21,10 @@ impl ConsolidationSummary {
 
     pub(crate) fn derived(&mut self) {
         self.new_derivations += 1;
+    }
+
+    pub(crate) fn changed_scope(&mut self) {
+        self.scopes_changed += 1;
     }
 
     pub(crate) fn obsolete(&mut self, statements: Vec<Statement>) {

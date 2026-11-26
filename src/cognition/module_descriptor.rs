@@ -14,6 +14,7 @@ pub(crate) struct ModuleDescriptor {
     supplies: Vec<String>,
     produces: Vec<EpistemicKind>,
     external: bool,
+    planning: bool,
 }
 
 impl ModuleDescriptor {
@@ -25,6 +26,7 @@ impl ModuleDescriptor {
             supplies: Vec::new(),
             produces: Vec::new(),
             external: false,
+            planning: false,
         }
     }
 
@@ -49,6 +51,16 @@ impl ModuleDescriptor {
     pub(crate) fn external(mut self) -> Self {
         self.external = true;
         self
+    }
+
+    /// Declares that the module may propose plans for the engine to follow.
+    pub(crate) fn planning(mut self) -> Self {
+        self.planning = true;
+        self
+    }
+
+    pub(crate) fn plans(&self) -> bool {
+        self.planning
     }
 
     pub(crate) fn name(&self) -> &str {

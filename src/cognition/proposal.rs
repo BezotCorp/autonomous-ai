@@ -11,6 +11,7 @@ pub(crate) struct Proposal {
     kind: EpistemicKind,
     premises: Vec<NodeId>,
     provenance: Option<Provenance>,
+    staleness: f64,
 }
 
 impl Proposal {
@@ -20,12 +21,32 @@ impl Proposal {
             kind,
             premises,
             provenance: None,
+            staleness: 0.0,
         }
     }
 
     pub(crate) fn with_provenance(mut self, provenance: Provenance) -> Self {
         self.provenance = Some(provenance);
         self
+    }
+
+    /// Probability that the proposed content no longer holds now, for
+    /// content remembered from an earlier observation.
+    pub(crate) fn with_staleness(mut self, staleness: f64) -> Self {
+        self.staleness = staleness;
+        self
+    }
+
+    pub(crate) fn staleness(&self) -> f64 {
+        self.staleness
+    }
+
+    pub(crate) fn provenance(&self) -> Option<&Provenance> {
+        self.provenance.as_ref()
+    }
+
+    pub(crate) fn content(&self) -> &Content {
+        &self.content
     }
 
     pub(crate) fn kind(&self) -> EpistemicKind {

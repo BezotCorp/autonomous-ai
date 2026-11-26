@@ -33,6 +33,9 @@ pub(crate) struct DocumentationObservation {
 }
 
 impl DocumentationObservation {
+    /// Documentation host, an external resource without known limit.
+    const RESOURCE: &'static str = "docs.rs";
+
     pub(crate) fn new() -> Self {
         Self {
             descriptor: ModuleDescriptor::new(
@@ -87,11 +90,21 @@ impl CognitiveModule for DocumentationObservation {
         }
 
         let mut cache = self.cache.borrow_mut();
+        let meter = context.access().meter();
 
         for ((package, version), symbols) in requests {
-            let documentation = cache
-                .entry((package.clone(), version.clone()))
-                .or_insert_with(|| DocumentationProvider::acquire(&package, &version));
+            let documentation = match cache.entry((package.clone(), version.clone())) {
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    meter.avoid();
+                    entry.into_mut()
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let documentation = DocumentationProvider::acquire(&package, &version);
+
+                    meter.record(Self::RESOURCE, documentation.source(), 1.0);
+                    entry.insert(documentation)
+                }
+            };
 
             let provenance = Provenance::new(
                 "docs.rs",

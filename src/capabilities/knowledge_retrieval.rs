@@ -13,7 +13,9 @@ use crate::{
 /// Searches the persistent knowledge for what the reasoning needs: active
 /// statements matching a need (or its negation) and open hypotheses able
 /// to conclude it. Recalled statements stay defeasible: a newer
-/// observation may contradict them.
+/// observation may contradict them. Each one is dated by the last
+/// verification of what it was observed in, with the probability that it
+/// no longer holds, so that it is never taken for a present observation.
 pub(crate) struct KnowledgeRetrieval {
     descriptor: ModuleDescriptor,
 }
@@ -44,6 +46,8 @@ impl CognitiveModule for KnowledgeRetrieval {
         let mut output = ModuleOutput::default();
         let mut recalled = BTreeSet::new();
         let mut hypotheses = BTreeSet::new();
+        let now = chrono::Utc::now();
+        let prior = context.parameters().change_prior();
 
         for node in graph.valid_nodes() {
             let Some(pattern) = node.content().need() else {
@@ -66,18 +70,16 @@ impl CognitiveModule for KnowledgeRetrieval {
                 }
 
                 if recalled.insert(entry.statement().clone()) {
+                    let (provenance, staleness) = knowledge.currency(entry, now, prior);
                     let mut proposal = Proposal::new(
                         Content::Statement(entry.statement().clone()),
                         EpistemicKind::Recollection,
                         Vec::new(),
-                    );
+                    )
+                    .with_staleness(staleness);
 
-                    if let Some(provenance) = entry
-                        .evidence()
-                        .iter()
-                        .find_map(|evidence| evidence.provenance())
-                    {
-                        proposal = proposal.with_provenance(provenance.clone());
+                    if let Some(provenance) = provenance {
+                        proposal = proposal.with_provenance(provenance);
                     }
 
                     output.propose(proposal);

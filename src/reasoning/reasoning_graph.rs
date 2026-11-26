@@ -22,6 +22,11 @@ use crate::{
 /// gets satisfied, the needs it was formulated for are reactivated, so that
 /// the modules able to supply them reconsider them now that more is known;
 /// when the satisfying statement is invalidated, the need reopens.
+///
+/// Finally, it distinguishes what is known to hold now from what held in
+/// the past: each node carries the probability that it is outdated, which
+/// propagates from recollections to the results derived from them and
+/// vanishes when they are confirmed by a current observation.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct ReasoningGraph {
     nodes: Vec<ReasoningNode>,
@@ -74,6 +79,34 @@ impl ReasoningGraph {
 
     /// Inserts a justified result. Premises must exist and be valid, and a
     /// result cannot be justified by itself, directly or transitively.
+    ///
+    /// `staleness` is the probability that the content itself is outdated
+    /// (for a recollection); the staleness of the premises is added to it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_dated(
+        &mut self,
+        content: Content,
+        kind: EpistemicKind,
+        producer: Producer,
+        premises: Vec<NodeId>,
+        provenance: Option<Provenance>,
+        step: usize,
+        staleness: f64,
+    ) -> Result<Insertion, String> {
+        let insertion = self.insert(content, kind, producer, premises, provenance, step)?;
+
+        if insertion.created && staleness > 0.0 {
+            let node = &mut self.nodes[insertion.id.index()];
+            let combined = 1.0 - (1.0 - node.staleness()) * (1.0 - staleness);
+
+            node.set_staleness(combined);
+        }
+
+        Ok(insertion)
+    }
+
+    /// Inserts a justified result whose content is current, apart from the
+    /// staleness inherited from its premises.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert(
         &mut self,
@@ -156,9 +189,16 @@ impl ReasoningGraph {
             _ => {}
         }
 
+        let inherited = Self::combine(
+            premises
+                .iter()
+                .map(|premise| self.nodes[premise.index()].staleness()),
+        );
+
         self.by_content.entry(content.clone()).or_default().push(id);
         self.dependents.push(Vec::new());
-        self.nodes.push(ReasoningNode::new(
+
+        let mut node = ReasoningNode::new(
             id,
             content,
             kind,
@@ -167,7 +207,10 @@ impl ReasoningGraph {
             provenance,
             step,
             self.revision,
-        ));
+        );
+
+        node.set_staleness(inherited);
+        self.nodes.push(node);
 
         match self.nodes[id.index()].content().clone() {
             Content::Statement(statement) => self.satisfy_needs(id, &statement),
@@ -185,6 +228,78 @@ impl ReasoningGraph {
             created: true,
             contradictions,
         })
+    }
+
+    /// Probability that at least one of independent contents is outdated.
+    fn combine(stalenesses: impl Iterator<Item = f64>) -> f64 {
+        1.0 - stalenesses
+            .map(|staleness| 1.0 - staleness)
+            .product::<f64>()
+    }
+
+    /// Marks nodes as confirmed to hold now and updates the staleness of
+    /// every result derived from them. Returns how many nodes became current.
+    pub(crate) fn confirm(&mut self, ids: &[NodeId]) -> usize {
+        let mut affected = BTreeSet::new();
+        let mut confirmed = 0;
+
+        for id in ids {
+            let node = &mut self.nodes[id.index()];
+
+            if node.is_valid() && !node.is_current() {
+                node.set_staleness(0.0);
+                confirmed += 1;
+                affected.extend(self.descendants(*id));
+            }
+        }
+
+        // Premises always precede their dependents: ascending identifiers
+        // are a topological order.
+        for id in affected {
+            let premises = self.nodes[id.index()].premises().to_vec();
+
+            if premises.is_empty() || ids.contains(&id) {
+                continue;
+            }
+
+            let staleness = Self::combine(
+                premises
+                    .iter()
+                    .map(|premise| self.nodes[premise.index()].staleness()),
+            );
+            let node = &mut self.nodes[id.index()];
+            let was_current = node.is_current();
+
+            node.set_staleness(staleness);
+
+            if !was_current && node.is_current() {
+                confirmed += 1;
+            }
+        }
+
+        confirmed
+    }
+
+    /// Lowest staleness among the valid statements answering the pattern,
+    /// or `None` when nothing answers it.
+    pub(crate) fn answer_staleness(&self, pattern: &Statement) -> Option<f64> {
+        let bindings = Bindings::default();
+        let complement = pattern.complement();
+        let negations = pattern
+            .is_ground()
+            .then(|| self.matching(&complement, &bindings))
+            .into_iter()
+            .flatten();
+
+        self.matching(pattern, &bindings)
+            .chain(negations)
+            .map(|(id, _)| self.nodes[id.index()].staleness())
+            .min_by(f64::total_cmp)
+    }
+
+    /// Whether a statement known to hold now answers the pattern.
+    pub(crate) fn answers_currently(&self, pattern: &Statement) -> bool {
+        self.answer_staleness(pattern) == Some(0.0)
     }
 
     /// Results directly justified by this node.
@@ -547,5 +662,55 @@ mod tests {
 
         assert!(!graph.satisfactions().contains_key(&sub));
         assert!(!graph.answers(&"item(?x)".parse().unwrap()));
+    }
+
+    #[test]
+    fn propagates_staleness_until_confirmation() {
+        let mut graph = ReasoningGraph::default();
+        let producer = Producer::Perception;
+
+        let remembered = graph
+            .insert_dated(
+                statement("p(a)"),
+                EpistemicKind::Recollection,
+                producer.clone(),
+                vec![],
+                None,
+                0,
+                0.4,
+            )
+            .unwrap()
+            .id();
+        let observed = graph
+            .insert(
+                statement("r(a)"),
+                EpistemicKind::Observation,
+                producer.clone(),
+                vec![],
+                None,
+                0,
+            )
+            .unwrap()
+            .id();
+        let derived = graph
+            .insert(
+                statement("q(a)"),
+                EpistemicKind::Deduction,
+                producer,
+                vec![remembered, observed],
+                None,
+                1,
+            )
+            .unwrap()
+            .id();
+
+        let question = "q(?x)".parse().unwrap();
+
+        assert!((graph.node(derived).unwrap().staleness() - 0.4).abs() < 1e-9);
+        assert_eq!(graph.answer_staleness(&question), Some(0.4));
+        assert!(!graph.answers_currently(&question));
+
+        assert_eq!(graph.confirm(&[remembered]), 2);
+        assert!(graph.answers_currently(&question));
     }
 }

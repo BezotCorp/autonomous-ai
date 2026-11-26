@@ -12,4 +12,7 @@ pub(crate) enum InvalidationCause {
     DependsOn { premise: NodeId },
     /// Part of a contradiction that could not be attributed to a defeasible cause.
     Contested { contradiction: usize },
+    /// Recalled from a revision of its source that a newer observation of
+    /// the same scope replaced, without observing it again.
+    Superseded { by: NodeId },
 }

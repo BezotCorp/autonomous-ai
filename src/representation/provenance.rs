@@ -36,4 +36,15 @@ impl Provenance {
     pub(crate) fn revision(&self) -> Option<&str> {
         self.revision.as_deref()
     }
+
+    /// When the content was acquired or, for remembered content, last
+    /// confirmed to hold.
+    pub(crate) fn acquired_at(&self) -> DateTime<Utc> {
+        self.acquired_at
+    }
+
+    pub(crate) fn confirmed_at(mut self, at: DateTime<Utc>) -> Self {
+        self.acquired_at = at;
+        self
+    }
 }

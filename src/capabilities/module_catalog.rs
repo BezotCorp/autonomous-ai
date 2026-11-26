@@ -6,6 +6,7 @@ use crate::{
         mathematical_reasoning::MathematicalReasoning, relational_analysis::RelationalAnalysis,
         release_observation::ReleaseObservation, repository_discovery::RepositoryDiscovery,
         source_reference_observation::SourceReferenceObservation,
+        strategic_planning::StrategicPlanning,
     },
     cognition::{cognitive_module::CognitiveModule, module_registry::ModuleRegistry},
 };
@@ -30,6 +31,7 @@ impl ModuleCatalog {
             HypothesisFormation::new(Self::INDUCTION_MINIMUM_SUPPORT),
         );
         Self::add(&mut registry, offline, KnowledgeRetrieval::new());
+        Self::add(&mut registry, offline, StrategicPlanning::new());
         Self::add(&mut registry, offline, LinguisticAnalysis::new());
         Self::add(&mut registry, offline, RepositoryDiscovery::new());
         Self::add(&mut registry, offline, CargoObservation::new());

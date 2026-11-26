@@ -20,11 +20,14 @@ use crate::{
     },
 };
 
-/// Observed revision and statements of one repository, or the failure.
-type RepositoryObservation = Result<(String, Vec<Statement>), String>;
+/// Statements observed in one repository, or the failure.
+type RepositoryObservation = Result<Vec<Statement>, String>;
 
 /// Observes the Cargo manifests and lockfiles of repositories at their
-/// current revision.
+/// current revision. Only what changed since the last acquisition is
+/// fetched again: unchanged revisions, trees and files are recognised by
+/// their SHA. Each repository is one observed scope: everything observed
+/// at a revision describes the whole Cargo state of that revision.
 ///
 /// Produced relations: `repository_revision(repo, sha)`,
 /// `cargo_package(repo, manifest, package, version)`,
@@ -56,23 +59,47 @@ impl CargoObservation {
         }
     }
 
-    fn observe(repository: &Repository) -> RepositoryObservation {
-        let revision = Github::revision(repository, "HEAD").map_err(|error| error.to_string())?;
-        let files = Github::files(repository, &revision).map_err(|error| error.to_string())?;
+    /// Statements describing the Cargo files of one repository at a
+    /// revision. Trees and files are addressed by their SHA: those already
+    /// acquired are read from the store, the others fetched together.
+    fn observe(
+        github: &Github<'_>,
+        repository: &Repository,
+        revision: &str,
+    ) -> RepositoryObservation {
+        let files = github.file_blobs(repository, revision)?;
         let name = Term::symbol(repository.full_name());
         let mut statements = vec![Statement::new(
             "repository_revision",
-            vec![name.clone(), Term::symbol(&revision)],
+            vec![name.clone(), Term::symbol(revision)],
         )];
 
-        let read = |path: &str| {
-            Github::read_file(repository, &revision, path)
-                .map_err(|error| format!("{}:{path}: {error}", repository.full_name()))
-        };
+        let relevant: Vec<(&String, &String)> = files
+            .iter()
+            .filter(|(path, _)| {
+                CargoManifest::matches_path(path) || CargoLockfile::matches_path(path)
+            })
+            .collect();
 
-        for path in files {
-            if CargoManifest::matches_path(&path) {
-                let manifest = CargoManifest::parse(path.clone(), &read(&path)?)
+        let shas: Vec<String> = relevant.iter().map(|(_, sha)| (*sha).clone()).collect();
+        let contents = github.blobs(repository, &shas);
+
+        for (path, sha) in relevant {
+            let content = match contents.get(sha) {
+                Some(Ok(content)) => content,
+                Some(Err(error)) => {
+                    return Err(format!("{}:{path}: {error}", repository.full_name()));
+                }
+                None => {
+                    return Err(format!(
+                        "{}:{path}: content not acquired",
+                        repository.full_name()
+                    ));
+                }
+            };
+
+            if CargoManifest::matches_path(path) {
+                let manifest = CargoManifest::parse(path.clone(), content)
                     .map_err(|error| format!("{path}: {error}"))?;
                 let manifest_path = Term::text(manifest.path());
 
@@ -116,8 +143,8 @@ impl CargoObservation {
                         ],
                     ));
                 }
-            } else if CargoLockfile::matches_path(&path) {
-                let lockfile = CargoLockfile::parse(path.clone(), &read(&path)?)
+            } else {
+                let lockfile = CargoLockfile::parse(path.clone(), content)
                     .map_err(|error| format!("{path}: {error}"))?;
 
                 for package in lockfile.packages() {
@@ -142,10 +169,16 @@ impl CargoObservation {
             }
         }
 
-        Ok((revision, statements))
+        Ok(statements)
     }
 
-    fn observe_many(repositories: &[Repository]) -> Vec<(Repository, RepositoryObservation)> {
+    /// Current revision of every repository, looked up together, then the
+    /// observation of each one, a few at a time.
+    fn observe_many(
+        github: &Github<'_>,
+        repositories: &[Repository],
+    ) -> Vec<(Repository, Option<String>, RepositoryObservation)> {
+        let revisions = github.head_revisions(repositories);
         let next = AtomicUsize::new(0);
         let workers = repositories
             .len()
@@ -160,7 +193,16 @@ impl CargoObservation {
                         while let Some(repository) =
                             repositories.get(next.fetch_add(1, Ordering::Relaxed))
                         {
-                            results.push((repository.clone(), Self::observe(repository)));
+                            let result = match revisions.get(repository) {
+                                Some(Ok(revision)) => (
+                                    Some(revision.clone()),
+                                    Self::observe(github, repository, revision),
+                                ),
+                                Some(Err(error)) => (None, Err(error.clone())),
+                                None => (None, Err("revision not looked up".to_owned())),
+                            };
+
+                            results.push((repository.clone(), result.0, result.1));
                         }
 
                         results
@@ -221,9 +263,11 @@ impl CognitiveModule for CargoObservation {
             }
         }
 
+        // Repositories already observed during this episode are current.
         let already: Statement = "repository_revision(?repository, ?revision)".parse()?;
         let observed: BTreeSet<String> = graph
             .matching(&already, &Default::default())
+            .filter(|(id, _)| graph.node(*id).is_some_and(|node| node.is_current()))
             .filter_map(|(_, bindings)| match bindings.get("repository") {
                 Some(Term::Symbol(repository)) => Some(repository.clone()),
                 _ => None,
@@ -240,12 +284,13 @@ impl CognitiveModule for CargoObservation {
             .collect();
 
         let mut failures = 0;
+        let github = Github::new(context.access());
 
-        for (repository, result) in Self::observe_many(&repositories) {
+        for (repository, revision, result) in Self::observe_many(&github, &repositories) {
             match result {
-                Ok((revision, statements)) => {
+                Ok(statements) => {
                     let provenance =
-                        Provenance::new("cargo", Some(repository.full_name()), Some(revision));
+                        Provenance::new("cargo", Some(repository.full_name()), revision);
 
                     for statement in statements {
                         output.propose(

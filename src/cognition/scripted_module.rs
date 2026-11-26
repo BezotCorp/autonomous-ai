@@ -5,17 +5,22 @@ use crate::{
     },
     reasoning::epistemic_kind::EpistemicKind,
     representation::{
-        bindings::Bindings, content::Content, content_kind::ContentKind, statement::Statement,
+        bindings::Bindings, content::Content, content_kind::ContentKind, provenance::Provenance,
+        statement::Statement,
     },
 };
 
 /// Test double of an acquisition capability: when one of the needs it
 /// supplies is open, it instantiates its output template for every known
 /// instance of its prerequisite, or expresses the prerequisite as a need.
+/// It may describe an observed scope (source, scope, revision) and consume
+/// units of an external resource at each acquisition.
 pub(crate) struct ScriptedModule {
     descriptor: ModuleDescriptor,
     prerequisite: Option<Statement>,
     template: Statement,
+    provenance: Option<(String, String, String)>,
+    consumption: Option<(String, f64)>,
 }
 
 impl ScriptedModule {
@@ -30,6 +35,35 @@ impl ScriptedModule {
                 .producing(&[EpistemicKind::Observation, EpistemicKind::Need]),
             prerequisite: prerequisite.map(|text| text.parse().unwrap()),
             template,
+            provenance: None,
+            consumption: None,
+        }
+    }
+
+    pub(crate) fn observing(mut self, source: &str, scope: &str, revision: &str) -> Self {
+        self.provenance = Some((source.to_owned(), scope.to_owned(), revision.to_owned()));
+        self
+    }
+
+    pub(crate) fn consuming(mut self, resource: &str, units: f64) -> Self {
+        self.consumption = Some((resource.to_owned(), units));
+        self
+    }
+
+    fn observation(&self, statement: Statement) -> Proposal {
+        let proposal = Proposal::new(
+            Content::Statement(statement),
+            EpistemicKind::Observation,
+            Vec::new(),
+        );
+
+        match &self.provenance {
+            Some((source, scope, revision)) => proposal.with_provenance(Provenance::new(
+                source.clone(),
+                Some(scope.clone()),
+                Some(revision.clone()),
+            )),
+            None => proposal,
         }
     }
 }
@@ -51,12 +85,15 @@ impl CognitiveModule for ScriptedModule {
             return Ok(output);
         }
 
+        if let Some((resource, units)) = &self.consumption {
+            let meter = context.access().meter();
+
+            meter.authorize(resource, *units)?;
+            meter.record(resource, self.descriptor.name(), *units);
+        }
+
         let Some(prerequisite) = &self.prerequisite else {
-            output.propose(Proposal::new(
-                Content::Statement(self.template.clone()),
-                EpistemicKind::Observation,
-                Vec::new(),
-            ));
+            output.propose(self.observation(self.template.clone()));
             return Ok(output);
         };
 
@@ -75,11 +112,7 @@ impl CognitiveModule for ScriptedModule {
         }
 
         for bindings in matches {
-            output.propose(Proposal::new(
-                Content::Statement(bindings.apply(&self.template)),
-                EpistemicKind::Observation,
-                Vec::new(),
-            ));
+            output.propose(self.observation(bindings.apply(&self.template)));
         }
 
         Ok(output)

@@ -1,13 +1,18 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    consumables::{resource_state::ResourceState, resource_usage::ResourceUsage},
     memory::{
         answer_record::AnswerRecord, episode_configuration::EpisodeConfiguration,
         impasse_record::ImpasseRecord, invocation_record::InvocationRecord,
-        revision_record::RevisionRecord, termination::Termination,
+        knowledge_exploitation::KnowledgeExploitation, revision_record::RevisionRecord,
+        termination::Termination,
     },
+    planning::plan_record::PlanRecord,
     representation::{rule::Rule, statement::Statement},
 };
 
@@ -29,6 +34,10 @@ pub(crate) struct EpisodeRecord {
     impasses: Vec<ImpasseRecord>,
     termination: Termination,
     notes: Vec<String>,
+    plans: Vec<PlanRecord>,
+    usage: ResourceUsage,
+    resources: BTreeMap<String, ResourceState>,
+    exploitation: KnowledgeExploitation,
 }
 
 impl EpisodeRecord {
@@ -64,7 +73,47 @@ impl EpisodeRecord {
             impasses,
             termination,
             notes,
+            plans: Vec::new(),
+            usage: ResourceUsage::default(),
+            resources: BTreeMap::new(),
+            exploitation: KnowledgeExploitation::default(),
         }
+    }
+
+    /// Adds what the episode did beyond reasoning: plans, consumption of
+    /// external resources and their state at the end, use of the memory.
+    pub(crate) fn with_execution(
+        mut self,
+        plans: Vec<PlanRecord>,
+        usage: ResourceUsage,
+        resources: BTreeMap<String, ResourceState>,
+        exploitation: KnowledgeExploitation,
+    ) -> Self {
+        self.plans = plans;
+        self.usage = usage;
+        self.resources = resources;
+        self.exploitation = exploitation;
+        self
+    }
+
+    pub(crate) fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub(crate) fn started_at(&self) -> DateTime<Utc> {
+        self.started_at
+    }
+
+    pub(crate) fn plans(&self) -> &[PlanRecord] {
+        &self.plans
+    }
+
+    pub(crate) fn usage(&self) -> &ResourceUsage {
+        &self.usage
+    }
+
+    pub(crate) fn exploitation(&self) -> &KnowledgeExploitation {
+        &self.exploitation
     }
 
     pub(crate) fn duration_micros(&self) -> u64 {

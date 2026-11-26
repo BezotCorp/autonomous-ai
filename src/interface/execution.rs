@@ -12,10 +12,10 @@ use crate::{
     capabilities::module_catalog::ModuleCatalog,
     engine::{intelligence::Intelligence, learning_parameters::LearningParameters},
     events::event::Event,
-    interface::arguments::Arguments,
+    interface::{arguments::Arguments, output::Output},
     memory::{
-        episode_configuration::EpisodeConfiguration, learning_statistics::LearningStatistics,
-        memory_store::MemoryStore,
+        episode_configuration::EpisodeConfiguration, episode_summary::EpisodeSummary,
+        learning_statistics::LearningStatistics, memory_store::MemoryStore,
     },
     resources::initial_resources::InitialResources,
 };
@@ -41,8 +41,10 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             offline,
             maximum_invocations,
             cost_weight,
+            scarcity_weight,
             minimum_utility,
-            detailed,
+            budgets,
+            output,
         } => {
             let mut input = String::new();
             io::stdin().read_to_string(&mut input)?;
@@ -57,6 +59,10 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
 
             if let Some(weight) = cost_weight {
                 parameters = parameters.with_cost_weight_per_second(weight);
+            }
+
+            if let Some(weight) = scarcity_weight {
+                parameters = parameters.with_scarcity_weight(weight);
             }
 
             if let Some(minimum) = minimum_utility {
@@ -77,18 +83,44 @@ fn execute_inner() -> Result<(), Box<dyn Error>> {
             let report = intelligence.reason(
                 &event,
                 &mut persistent,
-                EpisodeConfiguration::new(seed, acquired_knowledge, learned_routing),
-                detailed,
+                EpisodeConfiguration::new(seed, acquired_knowledge, learned_routing)
+                    .with_resource_budgets(budgets),
+                output == Output::Detailed,
             );
 
             store.save(&persistent)?;
-            write_output(&report)?;
+
+            if output == Output::Summary {
+                let mut stdout = io::stdout().lock();
+
+                writeln!(
+                    stdout,
+                    "{}",
+                    EpisodeSummary::new(
+                        persistent.experiences().episodes().len(),
+                        report.episode()
+                    )
+                )?;
+            } else {
+                write_output(&report)?;
+            }
         }
 
         Arguments::Inspect { memory, section } => {
             let persistent = open_existing(&memory)?.load()?;
 
             match section.as_str() {
+                "summary" => {
+                    let mut stdout = io::stdout().lock();
+
+                    writeln!(stdout, "{}", EpisodeSummary::HEADER)?;
+
+                    for (index, episode) in persistent.experiences().episodes().iter().enumerate() {
+                        writeln!(stdout, "{}", EpisodeSummary::new(index + 1, episode))?;
+                    }
+                }
+                "scopes" => write_output(&persistent.knowledge().scopes().collect::<Vec<_>>())?,
+                "resources" => write_output(persistent.resources())?,
                 "knowledge" => write_output(&persistent.knowledge().entries().collect::<Vec<_>>())?,
                 "hypotheses" => {
                     write_output(&persistent.knowledge().hypotheses().collect::<Vec<_>>())?

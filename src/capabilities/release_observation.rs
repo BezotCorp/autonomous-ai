@@ -44,15 +44,15 @@ impl ReleaseObservation {
     }
 
     fn compare(
+        github: &Github<'_>,
         repository: &Repository,
         from: &semver::Version,
         to: &semver::Version,
     ) -> Result<(String, Vec<Statement>), String> {
-        let text = |error: Box<dyn std::error::Error>| error.to_string();
-        let previous_revision = Github::release_revision(repository, from).map_err(text)?;
-        let current_revision = Github::release_revision(repository, to).map_err(text)?;
-        let previous_files = Github::file_blobs(repository, &previous_revision).map_err(text)?;
-        let current_files = Github::file_blobs(repository, &current_revision).map_err(text)?;
+        let previous_revision = github.release_revision(repository, from)?;
+        let current_revision = github.release_revision(repository, to)?;
+        let previous_files = github.file_blobs(repository, &previous_revision)?;
+        let current_files = github.file_blobs(repository, &current_revision)?;
 
         let name = Term::symbol(repository.full_name());
         let range = [Term::Version(from.clone()), Term::Version(to.clone())];
@@ -77,6 +77,18 @@ impl ReleaseObservation {
 
         let paths: BTreeSet<&String> = previous_files.keys().chain(current_files.keys()).collect();
 
+        // Changed Rust files of both revisions, acquired together.
+        let changed_sources: Vec<String> = paths
+            .iter()
+            .filter(|path| {
+                path.ends_with(".rs") && previous_files.get(**path) != current_files.get(**path)
+            })
+            .flat_map(|path| [previous_files.get(*path), current_files.get(*path)])
+            .flatten()
+            .cloned()
+            .collect();
+        let contents = github.blobs(repository, &changed_sources);
+
         for path in paths {
             if previous_files.get(path) == current_files.get(path) {
                 continue;
@@ -96,9 +108,11 @@ impl ReleaseObservation {
             }
 
             let surface = |files: &std::collections::BTreeMap<String, String>, revision: &str| {
-                if files.contains_key(path) {
-                    Github::read_file(repository, revision, path)
-                        .map_err(|error| error.to_string())
+                if let Some(sha) = files.get(path) {
+                    contents
+                        .get(sha)
+                        .cloned()
+                        .unwrap_or_else(|| Err("content not acquired".to_owned()))
                         .and_then(|source| RustSurface::parse(&source))
                         .map_err(|error| format!("{path}@{revision}: {error}"))
                 } else {
@@ -159,6 +173,7 @@ impl CognitiveModule for ReleaseObservation {
         }
 
         let mut failures = Vec::new();
+        let github = Github::new(context.access());
 
         for (repository, from, to) in &comparisons {
             let Some((owner, name)) = repository.split_once('/') else {
@@ -166,7 +181,7 @@ impl CognitiveModule for ReleaseObservation {
                 continue;
             };
 
-            match Self::compare(&Repository::new(owner, name), from, to) {
+            match Self::compare(&github, &Repository::new(owner, name), from, to) {
                 Ok((revisions, statements)) => {
                     let provenance = Provenance::new(
                         "release",

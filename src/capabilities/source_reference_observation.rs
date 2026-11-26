@@ -58,6 +58,7 @@ impl CognitiveModule for SourceReferenceObservation {
         }
 
         let mut failures = 0;
+        let github = Github::new(context.access());
 
         for full_name in &repositories {
             let Some((owner, name)) = full_name.split_once('/') else {
@@ -68,7 +69,7 @@ impl CognitiveModule for SourceReferenceObservation {
 
             let repository = Repository::new(owner, name);
 
-            let revision = match Github::revision(&repository, "HEAD") {
+            let revision = match github.revision(&repository, "HEAD") {
                 Ok(revision) => revision,
                 Err(error) => {
                     output.note(format!("{full_name}: {error}"));
@@ -77,7 +78,7 @@ impl CognitiveModule for SourceReferenceObservation {
                 }
             };
 
-            let scan = SourceReferenceScanner::scan(&repository, &revision);
+            let scan = SourceReferenceScanner::scan(&github, &repository, &revision);
             let provenance = Provenance::new("source", Some(full_name.clone()), Some(revision));
 
             for failure in scan.failures() {

@@ -77,8 +77,32 @@ impl QuestionAnswering {
             .map(|node| node.content().to_string())
             .collect();
 
+        // Answering statements are as outdated as their supports; the answer
+        // is outdated as soon as one of them is.
+        let staleness = 1.0
+            - answering
+                .iter()
+                .filter_map(|id| graph.node(*id))
+                .map(|node| 1.0 - node.staleness())
+                .product::<f64>();
+
+        let recollections: Vec<_> = support
+            .iter()
+            .filter_map(|id| graph.node(*id))
+            .filter(|node| node.kind() == EpistemicKind::Recollection && !node.is_current())
+            .collect();
+
+        let as_of = recollections
+            .iter()
+            .filter_map(|node| Some(node.provenance()?.acquired_at()))
+            .min();
+
         (
-            AnswerRecord::new(question.clone(), status, answers, justification, hypotheses),
+            AnswerRecord::new(question.clone(), status, answers, justification, hypotheses).dated(
+                staleness,
+                as_of,
+                recollections.len(),
+            ),
             support,
         )
     }

@@ -10,6 +10,8 @@ pub(crate) enum Termination {
     Quiescent,
     /// No candidate module was expected to be useful enough.
     NothingWorthTrying,
+    /// Every candidate module required a resource observed to be exhausted.
+    ResourcesExhausted,
     InvocationBudgetExhausted,
     TimeBudgetExhausted,
 }

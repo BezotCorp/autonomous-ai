@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::memory::change_prior::ChangePrior;
+
 /// Explicit parameters of the learning and decision algorithms. They are
 /// configuration, not knowledge: nothing here is learned, and every learned
 /// statistic lives in the routing memory instead.
@@ -12,6 +14,13 @@ pub(crate) struct LearningParameters {
     /// Penalty subtracted from the sampled success probability per second
     /// of expected execution time. 0 ignores costs entirely.
     cost_weight_per_second: f64,
+    /// Weight of the scarcity cost of the resources an action is expected
+    /// to consume (see `ResourceState::scarcity_cost`). 0 ignores scarcity.
+    scarcity_weight: f64,
+    /// Prior rate of change of an observed scope before it has been
+    /// verified: `prior_changes` over `prior_change_seconds`.
+    prior_changes: f64,
+    prior_change_seconds: f64,
     /// Expected utility below which no candidate is considered worth trying
     /// and the episode stops. The default never stops on this ground.
     minimum_utility: f64,
@@ -27,6 +36,9 @@ impl Default for LearningParameters {
             prior_successes: 1.0,
             prior_failures: 1.0,
             cost_weight_per_second: 0.01,
+            scarcity_weight: 1.0,
+            prior_changes: 1.0,
+            prior_change_seconds: 86_400.0,
             minimum_utility: 0.0,
             maximum_invocations: 64,
             maximum_duration: Duration::from_secs(600),
@@ -45,6 +57,11 @@ impl LearningParameters {
         self
     }
 
+    pub(crate) fn with_scarcity_weight(mut self, weight: f64) -> Self {
+        self.scarcity_weight = weight;
+        self
+    }
+
     pub(crate) fn with_minimum_utility(mut self, minimum: f64) -> Self {
         self.minimum_utility = minimum;
         self
@@ -60,6 +77,14 @@ impl LearningParameters {
 
     pub(crate) fn cost_weight_per_second(&self) -> f64 {
         self.cost_weight_per_second
+    }
+
+    pub(crate) fn scarcity_weight(&self) -> f64 {
+        self.scarcity_weight
+    }
+
+    pub(crate) fn change_prior(&self) -> ChangePrior {
+        ChangePrior::new(self.prior_changes, self.prior_change_seconds)
     }
 
     pub(crate) fn minimum_utility(&self) -> f64 {
